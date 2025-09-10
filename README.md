@@ -52,7 +52,7 @@ The device publishes JSON sensor data to the configured MQTT topic:
 
 ## Building and Uploading
 
-This project uses PlatformIO:
+### Method 1: PlatformIO (Recommended)
 
 ```bash
 # Build the project
@@ -64,6 +64,28 @@ platformio run --target upload
 # Monitor serial output
 platformio device monitor
 ```
+
+### Method 2: Alternative Flashing Methods
+
+If you don't have PlatformIO installed, you can use pre-built binaries:
+
+**STM32CubeProgrammer (Recommended):**
+1. Download from ST Microelectronics website (free registration required)
+2. Put AZ3166 in DFU mode (hold A+B, release B, release A)
+3. Flash `firmware.bin` to address `0x08000000`
+
+**st-flash (Command Line):**
+```bash
+# Install via Homebrew
+brew install stlink
+
+# Flash the binary
+st-flash write firmware.bin 0x8000000
+```
+
+⚠️ **Note**: Drag-and-drop to the AZ3166 volume is NOT reliable and can brick the device.
+
+See `FLASHING_GUIDE.md` in releases for complete instructions.
 
 ## Build Configuration
 
