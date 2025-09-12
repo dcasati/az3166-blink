@@ -1,6 +1,6 @@
 # AZ3166 Sensor Station
 
-A pure STM32-based sensor monitoring solution for the Azure IoT DevKit (MXChip AZ3166) that completely bypasses Azure services and provides direct MQTT connectivity with sensor data collection.
+A pure STM32-based sensor monitoring solution for the Azure IoT DevKit (MXChip AZ3166) that provides direct MQTT connectivity with sensor data collection.
 
 ## Features
 
