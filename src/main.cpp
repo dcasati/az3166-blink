@@ -16,6 +16,8 @@
 struct DeviceConfig {
   char magic[4];           // "AZ31" - magic bytes to verify valid config
   char deviceId[32];       // Device name/ID
+  char model[16];          // Device model (e.g., "az3166")
+  char location[32];       // Device location (e.g., "Garage")
   char ssid[32];          // WiFi SSID
   char password[64];      // WiFi password
   char mqttServer[64];    // MQTT server hostname
@@ -29,6 +31,8 @@ struct DeviceConfig {
 DeviceConfig config = {
   {'A','Z','3','1'},      // magic
   "SensorStation_01",     // deviceId
+  "az3166",               // model
+  "Garage",               // location
   "YourWiFiNetwork",      // ssid
   "YourWiFiPassword",     // password
   "mqtt.example.com",     // mqttServer
@@ -56,6 +60,16 @@ bool saveConfigToFlash() {
   // Hash device ID (32 bytes)
   for (int i = 0; i < 32; i++) {
     calculatedChecksum ^= config.deviceId[i];
+  }
+  
+  // Hash model (16 bytes)
+  for (int i = 0; i < 16; i++) {
+    calculatedChecksum ^= config.model[i];
+  }
+  
+  // Hash location (32 bytes)
+  for (int i = 0; i < 32; i++) {
+    calculatedChecksum ^= config.location[i];
   }
   
   // Hash SSID (32 bytes)
@@ -170,6 +184,16 @@ bool loadConfigFromFlash() {
     calculatedChecksum ^= flashConfig->deviceId[i];
   }
   
+  // Hash model (16 bytes)
+  for (int i = 0; i < 16; i++) {
+    calculatedChecksum ^= flashConfig->model[i];
+  }
+  
+  // Hash location (32 bytes)
+  for (int i = 0; i < 32; i++) {
+    calculatedChecksum ^= flashConfig->location[i];
+  }
+  
   // Hash SSID (32 bytes)
   for (int i = 0; i < 32; i++) {
     calculatedChecksum ^= flashConfig->ssid[i];
@@ -242,6 +266,8 @@ void loadDefaultConfig() {
   Serial.println("Loading default configuration...");
   config.magic[0] = 'A'; config.magic[1] = 'Z'; config.magic[2] = '3'; config.magic[3] = '1';
   strcpy(config.deviceId, "SensorStation_01");
+  strcpy(config.model, "az3166");
+  strcpy(config.location, "Garage");
   strcpy(config.ssid, "YourWiFiNetwork");
   strcpy(config.password, "YourWiFiPassword");
   strcpy(config.mqttServer, "mqtt.example.com");
@@ -292,6 +318,14 @@ void configureDevice() {
   String newDeviceId = readSerialString("Device ID", config.deviceId, sizeof(config.deviceId));
   strcpy(config.deviceId, newDeviceId.c_str());
   
+  // Device Model
+  String newModel = readSerialString("Device Model", config.model, sizeof(config.model));
+  strcpy(config.model, newModel.c_str());
+  
+  // Device Location
+  String newLocation = readSerialString("Device Location", config.location, sizeof(config.location));
+  strcpy(config.location, newLocation.c_str());
+  
   // WiFi SSID
   String newSSID = readSerialString("WiFi SSID", config.ssid, sizeof(config.ssid));
   strcpy(config.ssid, newSSID.c_str());
@@ -320,6 +354,8 @@ void configureDevice() {
   
   Serial.println("\n=== CONFIGURATION SUMMARY ===");
   Serial.print("Device ID: "); Serial.println(config.deviceId);
+  Serial.print("Device Model: "); Serial.println(config.model);
+  Serial.print("Device Location: "); Serial.println(config.location);
   Serial.print("WiFi SSID: "); Serial.println(config.ssid);
   Serial.print("WiFi Password: "); Serial.println("***hidden***");
   Serial.print("MQTT Server: "); Serial.println(config.mqttServer);
@@ -787,11 +823,11 @@ int main() {
       // Create JSON payload with all sensors
       char jsonPayload[512];
       sprintf(jsonPayload, 
-        "{\"device\":\"%s\",\"timestamp\":%lu,\"temperature\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
+        "{\"device\":\"%s\",\"model\":\"%s\",\"location\":\"%s\",\"temperature\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
         "\"accel\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},"
         "\"gyro\":{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f},"
         "\"mag\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f}}",
-        config.deviceId, now, temperature, humidity, pressure,
+        config.deviceId, config.model, config.location, temperature, humidity, pressure,
         accel_x, accel_y, accel_z,
         gyro_x, gyro_y, gyro_z,
         mag_x, mag_y, mag_z);
