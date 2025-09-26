@@ -18,6 +18,30 @@ A pure STM32-based sensor monitoring solution for the Azure IoT DevKit (MXChip A
 - WiFi network access
 - MQTT broker (e.g., Mosquitto)
 
+## Serial Communication
+
+The device uses USB serial communication for configuration and monitoring:
+
+**Connection Parameters:**
+- **Baud Rate**: 115200
+- **Data Bits**: 8
+- **Parity**: None
+- **Stop Bits**: 1
+- **Flow Control**: None
+
+**Connecting:**
+1. Connect the AZ3166 to your computer via USB
+2. The device appears as a virtual COM port
+3. Use any serial terminal application:
+   - **macOS/Linux**: `screen /dev/tty.usbmodem* 115200` or `minicom`
+   - **Windows**: PuTTY, Tera Term, or built-in Windows Terminal
+   - **PlatformIO**: `platformio device monitor` (automatically detects settings)
+
+**Serial Commands:**
+- Press **'C'** within 5 seconds of device startup to enter configuration mode
+- Configuration mode allows setting WiFi credentials and MQTT parameters
+- Normal operation displays sensor readings and connection status
+
 ## Configuration
 
 The device supports both default configuration and interactive serial configuration:
