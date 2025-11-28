@@ -8,6 +8,9 @@
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_flash.h"
 
+// Web server
+WiFiServer webServer(80);
+
 // Flash storage for configuration (using STM32 internal flash)
 #define CONFIG_FLASH_SECTOR     FLASH_SECTOR_10    // Use sector 10 for config (128KB sector)
 #define CONFIG_FLASH_ADDRESS    0x080C0000         // Start of sector 10
@@ -251,6 +254,29 @@ LIS2MDLSensor *magnetometer;
 
 // RGB LED instance
 RGB_LED rgbLED;
+
+// Control states for web interface
+bool ledEnabled = true;
+bool displayEnabled = true;
+bool mqttConnected = false;  // Global MQTT connection status
+
+// Debounce variables to prevent rapid toggling
+unsigned long lastLedChange = 0;
+unsigned long lastDisplayChange = 0;
+const unsigned long DEBOUNCE_DELAY = 1000; // 1 second minimum between changes
+
+// Global sensor values for web display
+float lastTemperature = 0.0;
+float lastHumidity = 0.0;
+float lastPressure = 0.0;
+float lastAccelX = 0.0, lastAccelY = 0.0, lastAccelZ = 0.0;
+float lastGyroX = 0.0, lastGyroY = 0.0, lastGyroZ = 0.0;
+float lastMagX = 0.0, lastMagY = 0.0, lastMagZ = 0.0;
+
+// Sensor calibration offsets
+// Adjust these values to match your local conditions
+const float PRESSURE_OFFSET = 141.0; // mbar offset to correct sensor reading
+const float TEMPERATURE_OFFSET = -2.0; // °C offset to correct temperature reading
 
 // Configuration management functions
 uint8_t calculateChecksum(const DeviceConfig* cfg) {
@@ -623,6 +649,98 @@ bool publishMQTT(const char* topic, const char* payload) {
   return true;
 }
 
+// Web server functions - optimized for speed
+void sendWebPage(WiFiClient &client) {
+  // Send HTTP headers
+  client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n");
+  
+  // Send compact HTML
+  client.print("<!DOCTYPE html><html><head><title>Az3166</title>");
+  client.print("<meta name='viewport' content='width=device-width, initial-scale=1'>");
+  client.print("<style>body{font:16px Arial;margin:10px;background:#f5f5f5}");
+  client.print(".c{background:#fff;padding:15px;margin:10px 0;border-radius:5px}");
+  client.print(".b{display:inline-block;padding:12px 20px;margin:5px;text-decoration:none;border-radius:5px;font-weight:bold;color:#fff;min-width:70px;text-align:center}");
+  client.print(".on{background:#4CAF50}.off{background:#f44336}");
+  client.print("h3{margin:5px 0;color:#333}label{font-weight:bold;color:#555}");
+  client.print(".s{display:flex;flex-wrap:wrap;gap:8px}.si{flex:1;min-width:120px;background:#f8f9fa;padding:6px;border-radius:3px;font-size:14px}");
+  client.print("@media (max-width:480px){.b{display:block;margin:3px 0}.si{min-width:100%}}</style></head><body>");
+  
+  client.print("<div class='c'><h3>Az3166 Control</h3>");
+  
+  // Controls - more compact
+  client.print("LED: "); client.print(ledEnabled ? "ON" : "OFF");
+  client.print(" <a href='/led?state=on' class='b on'>ON</a><a href='/led?state=off' class='b off'>OFF</a><br>");
+  client.print("Display: "); client.print(displayEnabled ? "ON" : "OFF");
+  client.print(" <a href='/display?state=on' class='b on'>ON</a><a href='/display?state=off' class='b off'>OFF</a></div>");
+  
+  // Sensors - condensed
+  client.print("<div class='c'><h3>Sensors</h3><div class='s'>");
+  client.print("<div class='si'><b>Temp</b><br>"); client.print(lastTemperature, 1); client.print("&deg;C</div>");
+  client.print("<div class='si'><b>Humidity</b><br>"); client.print(lastHumidity, 0); client.print("%</div>");
+  client.print("<div class='si'><b>Pressure</b><br>"); client.print(lastPressure, 0); client.print(" mb</div>");
+  client.print("<div class='si'><b>Accel</b><br>"); client.print(lastAccelX, 1); client.print(","); 
+  client.print(lastAccelY, 1); client.print(","); client.print(lastAccelZ, 1); client.print(" g</div>");
+  client.print("<div class='si'><b>Gyro</b><br>"); client.print(lastGyroX, 0); client.print(",");
+  client.print(lastGyroY, 0); client.print(","); client.print(lastGyroZ, 0); client.print(" dps</div>");
+  client.print("</div></div>");
+  
+  // Status - minimal
+  client.print("<div class='c'><b>Device:</b> "); client.print(config.deviceId);
+  client.print("<br><b>MQTT:</b> "); client.print(mqttConnected ? "OK" : "NO");
+  client.print("</div></body></html>");
+}
+
+void handleWebServer() {
+  WiFiClient client = webServer.available();
+  if (client) {
+    // Fast request reading - only read first line
+    String request = "";
+    unsigned long timeout = millis() + 500; // Shorter timeout
+    
+    while (client.connected() && millis() < timeout) {
+      if (client.available()) {
+        char c = client.read();
+        request += c;
+        if (c == '\n' || request.length() > 100) break; // Stop at newline or max length
+      }
+    }
+    
+    // Quick processing
+    if (request.length() > 0) {
+      unsigned long now = millis();
+      
+      // Fast parsing - check specific patterns
+      if (request.indexOf("/led?state=on") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
+        ledEnabled = true;
+        lastLedChange = now;
+      }
+      else if (request.indexOf("/led?state=off") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
+        ledEnabled = false;
+        rgbLED.turnOff();
+        lastLedChange = now;
+      }
+      else if (request.indexOf("/display?state=on") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
+        displayEnabled = true;
+        lastDisplayChange = now;
+        if (displayEnabled) {
+          Screen.init();
+          Screen.print(0, config.deviceId);
+          Screen.print(1, "Web Control");
+        }
+      }
+      else if (request.indexOf("/display?state=off") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
+        displayEnabled = false;
+        lastDisplayChange = now;
+        Screen.clean();
+      }
+    }
+    
+    // Always send response quickly
+    sendWebPage(client);
+    client.stop();
+  }
+}
+
 // Custom main function to bypass Azure framework
 int main() {
   // Initialize hardware
@@ -706,6 +824,12 @@ int main() {
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
     Screen.print(3, "WiFi connected!");
+    
+    // Start web server
+    webServer.begin();
+    Serial.println("Web server started");
+    Serial.print("Access control panel at: http://");
+    Serial.println(WiFi.localIP());
   } else {
     Serial.println("\nWiFi failed!");
     Screen.print(3, "WiFi failed!");
@@ -714,10 +838,15 @@ int main() {
   // Main loop with sensor reading and MQTT publishing
   int counter = 0;
   unsigned long lastSensorRead = 0;
-  bool mqttConnected = false;
+  unsigned long lastMqttPublish = 0;  // Separate timer for MQTT
   
   while (1) {
     unsigned long now = millis();
+    
+    // Handle web server requests
+    if (WiFi.status() == WL_CONNECTED) {
+      handleWebServer();
+    }
     
     // Try to connect MQTT if not connected
     if (!mqttConnected && WiFi.status() == WL_CONNECTED) {
@@ -726,12 +855,18 @@ int main() {
       Serial.println(WiFi.localIP());
       Serial.print("Gateway: ");
       Serial.println(WiFi.gatewayIP());
-      Screen.print(2, "MQTT connecting...");
+      if (displayEnabled) {
+        Screen.print(2, "MQTT connecting...");
+      }
       mqttConnected = connectMQTT();
       if (mqttConnected) {
-        Screen.print(2, "MQTT connected!");
+        if (displayEnabled) {
+          Screen.print(2, "MQTT connected!");
+        }
       } else {
-        Screen.print(2, "MQTT failed!");
+        if (displayEnabled) {
+          Screen.print(2, "MQTT failed!");
+        }
         // Wait 10 seconds before trying again
         delay(10000);
       }
@@ -750,6 +885,13 @@ int main() {
       ht_sensor->getTemperature(&temperature);
       ht_sensor->getHumidity(&humidity);
       
+      // Apply temperature calibration offset
+      temperature += TEMPERATURE_OFFSET;
+      
+      // Store in global variables for web display
+      lastTemperature = temperature;
+      lastHumidity = humidity;
+      
       Serial.print("Temperature: ");
       Serial.print(temperature);
       Serial.println(" °C");
@@ -761,6 +903,9 @@ int main() {
       // Read Pressure
       float pressure;
       pressure_sensor->getPressure(&pressure);
+      // Apply calibration offset to match actual atmospheric pressure
+      pressure += PRESSURE_OFFSET;
+      lastPressure = pressure;
       
       Serial.print("Pressure: ");
       Serial.print(pressure);
@@ -772,6 +917,9 @@ int main() {
       float accel_x = axes[0] / 1000.0f;  // Convert to g
       float accel_y = axes[1] / 1000.0f;
       float accel_z = axes[2] / 1000.0f;
+      lastAccelX = accel_x;
+      lastAccelY = accel_y;
+      lastAccelZ = accel_z;
       
       Serial.print("Accelerometer: X=");
       Serial.print(accel_x, 3);
@@ -787,6 +935,9 @@ int main() {
       float gyro_x = gyro_axes[0] / 1000.0f;  // Convert to dps
       float gyro_y = gyro_axes[1] / 1000.0f;
       float gyro_z = gyro_axes[2] / 1000.0f;
+      lastGyroX = gyro_x;
+      lastGyroY = gyro_y;
+      lastGyroZ = gyro_z;
       
       Serial.print("Gyroscope: X=");
       Serial.print(gyro_x, 2);
@@ -802,6 +953,9 @@ int main() {
       float mag_x = mag_axes[0] / 1000.0f;  // Convert to gauss
       float mag_y = mag_axes[1] / 1000.0f;
       float mag_z = mag_axes[2] / 1000.0f;
+      lastMagX = mag_x;
+      lastMagY = mag_y;
+      lastMagZ = mag_z;
       
       Serial.print("Magnetometer: X=");
       Serial.print(mag_x, 3);
@@ -811,47 +965,57 @@ int main() {
       Serial.print(mag_z, 3);
       Serial.println("G");
       
-      // Update display
-      char tempStr[32];
-      sprintf(tempStr, "T:%.1fC H:%.0f%%", temperature, humidity);
-      Screen.print(1, tempStr);
+      // Update display (only if enabled)
+      if (displayEnabled) {
+        char tempStr[32];
+        sprintf(tempStr, "T:%.1fC H:%.0f%%", temperature, humidity);
+        Screen.print(1, tempStr);
+        
+        char pressStr[32];
+        sprintf(pressStr, "P:%.0fmbar", pressure);
+        Screen.print(2, pressStr);
+      }
       
-      char pressStr[32];
-      sprintf(pressStr, "P:%.0fmbar", pressure);
-      Screen.print(2, pressStr);
+      counter++;
+    }
+    
+    // Publish to MQTT every 30 seconds (separate from sensor reading)
+    if (mqttConnected && now - lastMqttPublish > 30000) {
+      lastMqttPublish = now;
       
-      // Create JSON payload with all sensors
+      // Create JSON payload with latest sensor values
       char jsonPayload[512];
       sprintf(jsonPayload, 
         "{\"device\":\"%s\",\"model\":\"%s\",\"location\":\"%s\",\"temperature\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
         "\"accel\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},"
         "\"gyro\":{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f},"
         "\"mag\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f}}",
-        config.deviceId, config.model, config.location, temperature, humidity, pressure,
-        accel_x, accel_y, accel_z,
-        gyro_x, gyro_y, gyro_z,
-        mag_x, mag_y, mag_z);
+        config.deviceId, config.model, config.location, lastTemperature, lastHumidity, lastPressure,
+        lastAccelX, lastAccelY, lastAccelZ,
+        lastGyroX, lastGyroY, lastGyroZ,
+        lastMagX, lastMagY, lastMagZ);
       
-      Serial.print("JSON: ");
+      Serial.print("MQTT JSON: ");
       Serial.println(jsonPayload);
       
-      // Publish to MQTT if connected
-      if (mqttConnected) {
-        if (publishMQTT(config.mqttTopic, jsonPayload)) {
+      if (publishMQTT(config.mqttTopic, jsonPayload)) {
+        if (displayEnabled) {
           Screen.print(3, "MQTT sent!");
-        } else {
-          Screen.print(3, "MQTT failed!");
-          mqttConnected = false;  // Reconnect next time
         }
+        Serial.println("MQTT published successfully");
+      } else {
+        if (displayEnabled) {
+          Screen.print(3, "MQTT failed!");
+        }
+        mqttConnected = false;  // Reconnect next time
+        Serial.println("MQTT publish failed");
       }
-      
-      counter++;
     }
     
-    // Heartbeat LED - use RGB LED instead of built-in
+    // Heartbeat LED - use RGB LED instead of built-in (only if enabled)
     static unsigned long lastBlink = 0;
     static bool ledState = false;
-    if (now - lastBlink > 1000) {
+    if (ledEnabled && now - lastBlink > 1000) {
       lastBlink = now;
       ledState = !ledState;
       if (ledState) {
