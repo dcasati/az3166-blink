@@ -7,9 +7,14 @@
 #include "Sensor.h"
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_flash.h"
+#include "rtos.h"
+#include "Thread.h"
 
 // Web server
 WiFiServer webServer(80);
+
+// Thread for web server
+rtos::Thread *webServerThread_ptr = NULL;
 
 // Flash storage for configuration (using STM32 internal flash)
 #define CONFIG_FLASH_SECTOR     FLASH_SECTOR_10    // Use sector 10 for config (128KB sector)
@@ -264,6 +269,13 @@ bool mqttConnected = false;  // Global MQTT connection status
 unsigned long lastLedChange = 0;
 unsigned long lastDisplayChange = 0;
 const unsigned long DEBOUNCE_DELAY = 1000; // 1 second minimum between changes
+
+// WiFi retry management
+unsigned long lastWifiCheck = 0;
+unsigned long lastWifiRetry = 0;
+bool webServerStarted = false;
+const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
+const unsigned long WIFI_RETRY_INTERVAL = 30000; // Retry WiFi every 30 seconds
 
 // Global sensor values for web display
 float lastTemperature = 0.0;
@@ -644,100 +656,266 @@ bool publishMQTT(const char* topic, const char* payload) {
   Serial.print(", Payload size=");
   Serial.println(payloadLen);
   
-  mqttWifiClient.write(packet, pos);
-  Serial.println("MQTT message published");
+  size_t written = mqttWifiClient.write(packet, pos);
+  Serial.print("MQTT bytes written: ");
+  Serial.print(written);
+  Serial.print("/");
+  Serial.println(pos);
+  
+  if (written != pos) {
+    Serial.println("MQTT write failed!");
+    return false;
+  }
+  
+  mqttWifiClient.flush();
+  Serial.println("MQTT message published and flushed");
   return true;
 }
 
 // Web server functions - optimized for speed
+
+
 void sendWebPage(WiFiClient &client) {
-  // Send HTTP headers
-  client.print("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n");
+  unsigned long sendStart = millis();
+  Serial.print("Sending web page at ");
+  Serial.println(sendStart);
   
-  // Send compact HTML
-  client.print("<!DOCTYPE html><html><head><title>Az3166</title>");
-  client.print("<meta name='viewport' content='width=device-width, initial-scale=1'>");
-  client.print("<style>body{font:16px Arial;margin:10px;background:#f5f5f5}");
-  client.print(".c{background:#fff;padding:15px;margin:10px 0;border-radius:5px}");
-  client.print(".b{display:inline-block;padding:12px 20px;margin:5px;text-decoration:none;border-radius:5px;font-weight:bold;color:#fff;min-width:70px;text-align:center}");
-  client.print(".on{background:#4CAF50}.off{background:#f44336}");
-  client.print("h3{margin:5px 0;color:#333}label{font-weight:bold;color:#555}");
-  client.print(".s{display:flex;flex-wrap:wrap;gap:8px}.si{flex:1;min-width:120px;background:#f8f9fa;padding:6px;border-radius:3px;font-size:14px}");
-  client.print("@media (max-width:480px){.b{display:block;margin:3px 0}.si{min-width:100%}}</style></head><body>");
+  // Build body with simplified HTML
+  char body[1200];
+  int bodyLen = snprintf(body, sizeof(body),
+    "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width'><title>%s</title>"
+    "<style>body{font-family:Arial;margin:15px;background:#f5f5f7}"
+    ".c{background:#fff;border-radius:8px;padding:12px;margin-bottom:10px}"
+    "h2{margin:0 0 6px;font-size:18px}"
+    ".s{font-size:11px;color:#666;margin-bottom:8px}"
+    ".b{padding:2px 5px;border-radius:3px;font-size:10px;font-weight:600}"
+    ".on{background:#34c759;color:#fff}.off{background:#ff3b30;color:#fff}"
+    "a{display:block;padding:12px;margin:6px 0;border-radius:6px;text-decoration:none;text-align:center;font-weight:600;font-size:14px}"
+    ".g{background:#34c759;color:#fff}.r{background:#ff3b30;color:#fff}.u{background:#007aff;color:#fff}"
+    "</style></head><body>"
+    "<div class='c'><h2>%s</h2>"
+    "<div class='s'>MQTT: <span class='b %s'>%s</span> | %s</div></div>"
+    "<div class='c'>"
+    "<a href='/led?state=on' class='g'>LED ON</a>"
+    "<a href='/led?state=off' class='r'>LED OFF</a>"
+    "<a href='/display?state=on' class='g'>Display ON</a>"
+    "<a href='/display?state=off' class='r'>Display OFF</a>"
+    "<a href='/reset' class='u'>RESET</a>"
+    "</div></body></html>",
+    config.deviceId,
+    config.deviceId,
+    mqttConnected ? "on" : "off",
+    mqttConnected ? "CONNECTED" : "DISCONNECTED",
+    config.mqttServer);
+  if (bodyLen < 0) {
+    bodyLen = strlen(body);
+    Serial.println("Body snprintf error, using strlen");
+  } else if (bodyLen >= (int)sizeof(body)) {
+    bodyLen = sizeof(body) - 1;
+    Serial.print("Body truncated! Needed: ");
+    Serial.print(bodyLen);
+    Serial.print(", buffer: ");
+    Serial.println(sizeof(body));
+  } else {
+    Serial.print("Body length: ");
+    Serial.println(bodyLen);
+  }
   
-  client.print("<div class='c'><h3>Az3166 Control</h3>");
+  // Build header with explicit Content-Length
+  char header[160];
+  int headerLen = snprintf(header, sizeof(header),
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/html\r\n"
+    "Connection: close\r\n"
+    "Content-Length: %d\r\n"
+    "\r\n",
+    bodyLen);
+  if (headerLen < 0) {
+    headerLen = strlen(header);
+    Serial.println("Header snprintf error, using strlen");
+  }
   
-  // Controls - more compact
-  client.print("LED: "); client.print(ledEnabled ? "ON" : "OFF");
-  client.print(" <a href='/led?state=on' class='b on'>ON</a><a href='/led?state=off' class='b off'>OFF</a><br>");
-  client.print("Display: "); client.print(displayEnabled ? "ON" : "OFF");
-  client.print(" <a href='/display?state=on' class='b on'>ON</a><a href='/display?state=off' class='b off'>OFF</a></div>");
-  
-  // Sensors - condensed
-  client.print("<div class='c'><h3>Sensors</h3><div class='s'>");
-  client.print("<div class='si'><b>Temp</b><br>"); client.print(lastTemperature, 1); client.print("&deg;C</div>");
-  client.print("<div class='si'><b>Humidity</b><br>"); client.print(lastHumidity, 0); client.print("%</div>");
-  client.print("<div class='si'><b>Pressure</b><br>"); client.print(lastPressure, 0); client.print(" mb</div>");
-  client.print("<div class='si'><b>Accel</b><br>"); client.print(lastAccelX, 1); client.print(","); 
-  client.print(lastAccelY, 1); client.print(","); client.print(lastAccelZ, 1); client.print(" g</div>");
-  client.print("<div class='si'><b>Gyro</b><br>"); client.print(lastGyroX, 0); client.print(",");
-  client.print(lastGyroY, 0); client.print(","); client.print(lastGyroZ, 0); client.print(" dps</div>");
-  client.print("</div></div>");
-  
-  // Status - minimal
-  client.print("<div class='c'><b>Device:</b> "); client.print(config.deviceId);
-  client.print("<br><b>MQTT:</b> "); client.print(mqttConnected ? "OK" : "NO");
-  client.print("</div></body></html>");
+  size_t written = client.write((const uint8_t*)header, headerLen);
+  written += client.write((const uint8_t*)body, bodyLen);
+  client.flush();
+  Serial.print("Total bytes written: ");
+  Serial.println(written);
+  Serial.print("Send duration: ");
+  Serial.println(millis() - sendStart);
+  Serial.println("Web page sent!");
 }
 
-void handleWebServer() {
-  WiFiClient client = webServer.available();
-  if (client) {
-    // Fast request reading - only read first line
-    String request = "";
-    unsigned long timeout = millis() + 500; // Shorter timeout
+// WiFi management function with retry logic
+void manageWiFi() {
+  unsigned long now = millis();
+  
+  // Check WiFi status every 5 seconds
+  if (now - lastWifiCheck > WIFI_CHECK_INTERVAL) {
+    lastWifiCheck = now;
     
-    while (client.connected() && millis() < timeout) {
-      if (client.available()) {
-        char c = client.read();
-        request += c;
-        if (c == '\n' || request.length() > 100) break; // Stop at newline or max length
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi disconnected!");
+      if (displayEnabled) {
+        Screen.print(3, "WiFi lost!");
       }
-    }
-    
-    // Quick processing
-    if (request.length() > 0) {
-      unsigned long now = millis();
+      webServerStarted = false;
+      mqttConnected = false;
       
-      // Fast parsing - check specific patterns
-      if (request.indexOf("/led?state=on") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
-        ledEnabled = true;
-        lastLedChange = now;
-      }
-      else if (request.indexOf("/led?state=off") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
-        ledEnabled = false;
-        rgbLED.turnOff();
-        lastLedChange = now;
-      }
-      else if (request.indexOf("/display?state=on") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
-        displayEnabled = true;
-        lastDisplayChange = now;
+      // Try to reconnect every 30 seconds
+      if (now - lastWifiRetry > WIFI_RETRY_INTERVAL) {
+        lastWifiRetry = now;
+        Serial.println("Attempting WiFi reconnection...");
         if (displayEnabled) {
-          Screen.init();
-          Screen.print(0, config.deviceId);
-          Screen.print(1, "Web Control");
+          Screen.print(3, "WiFi retry...");
+        }
+        
+        WiFi.disconnect();
+        delay(1000);
+        WiFi.begin(config.ssid, config.password);
+        
+        // Wait up to 10 seconds for connection
+        int attempts = 0;
+        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+          delay(500);
+          Serial.print(".");
+          attempts++;
+        }
+        
+        if (WiFi.status() == WL_CONNECTED) {
+          Serial.println("\nWiFi reconnected!");
+          Serial.print("IP: ");
+          Serial.println(WiFi.localIP());
+          if (displayEnabled) {
+            char ipStr[16];
+            sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
+            Screen.print(3, ipStr);
+          }
+        } else {
+          Serial.println("\nWiFi retry failed!");
+          if (displayEnabled) {
+            Screen.print(3, "WiFi failed!");
+          }
         }
       }
-      else if (request.indexOf("/display?state=off") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
-        displayEnabled = false;
-        lastDisplayChange = now;
-        Screen.clean();
+    } else {
+      // WiFi is connected
+      if (!webServerStarted) {
+        // Start web server if not already started
+        webServer.begin();
+        webServerStarted = true;
+        Serial.println("Web server restarted");
+        Serial.print("Access control panel at: http://");
+        Serial.println(WiFi.localIP());
+      }
+    }
+  }
+}
+
+// Web server thread function - runs independently
+void webServerThreadFunc() {
+  Serial.println("Web server thread started");
+  
+  while (1) {
+    if (WiFi.status() == WL_CONNECTED && webServerStarted) {
+      WiFiClient client = webServer.available();
+      
+      if (client) {
+        Serial.println(">>> Web client connected <<<");
+        
+        // Wait briefly for data
+        unsigned long start = millis();
+        while (!client.available() && client.connected() && millis() - start < 100) {
+          Thread::wait(1);
+        }
+        
+        if (!client.available()) {
+          Serial.println("No data received, closing");
+          client.stop();
+          continue;
+        }
+        
+        // Read request line
+        String request = "";
+        unsigned long readStart = millis();
+        while (client.available() && request.length() < 256 && millis() - readStart < 50) {
+          char c = client.read();
+          if (c == '\r') continue;
+          if (c == '\n') break;
+          request += c;
+        }
+        
+        // Consume headers
+        String headerLine = "";
+        unsigned long headerStart = millis();
+        while (client.connected() && millis() - headerStart < 100) {
+          if (!client.available()) {
+            Thread::wait(1);
+            continue;
+          }
+          char c = client.read();
+          if (c == '\r') continue;
+          if (c == '\n') {
+            if (headerLine.length() == 0) break;
+            headerLine = "";
+          } else {
+            headerLine += c;
+          }
+        }
+        
+        Serial.print("Request: ");
+        Serial.println(request);
+        
+        // Process commands
+        if (request.length() > 0) {
+          unsigned long now = millis();
+          
+          if (request.indexOf("/led?state=on") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
+            ledEnabled = true;
+            lastLedChange = now;
+          }
+          else if (request.indexOf("/led?state=off") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
+            ledEnabled = false;
+            rgbLED.turnOff();
+            lastLedChange = now;
+          }
+          else if (request.indexOf("/display?state=on") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
+            displayEnabled = true;
+            lastDisplayChange = now;
+            Screen.init();
+            Screen.print(0, config.deviceId);
+            Screen.print(1, "Web Control");
+            if (WiFi.status() == WL_CONNECTED) {
+              char ipStr[16];
+              sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
+              Screen.print(3, ipStr);
+            }
+          }
+          else if (request.indexOf("/display?state=off") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
+            displayEnabled = false;
+            lastDisplayChange = now;
+            Screen.clean();
+          }
+          else if (request.indexOf("/reset") > 0) {
+            Serial.println("RESET requested via web interface");
+            sendWebPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Thread::wait(100);
+            NVIC_SystemReset();
+          }
+        }
+        
+        Serial.println("Responding with web page...");
+        sendWebPage(client);
+        client.flush();
+        Thread::wait(10);
+        client.stop();
+        Serial.println("Client connection closed");
       }
     }
     
-    // Always send response quickly
-    sendWebPage(client);
-    client.stop();
+    Thread::wait(50);  // Yield to other threads
   }
 }
 
@@ -786,6 +964,8 @@ int main() {
   Screen.print(0, config.deviceId);
   Screen.print(2, "Sensors + MQTT");
   
+
+  
   // Initialize I2C and sensors
   Serial.println("Initializing sensors...");
   i2c = new DevI2C(D14, D15);
@@ -823,16 +1003,36 @@ int main() {
     Serial.println("\nWiFi connected!");
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
-    Screen.print(3, "WiFi connected!");
+    
+    // Display IP address on OLED
+    char ipStr[16];
+    sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
+    Screen.print(3, ipStr);
     
     // Start web server
     webServer.begin();
-    Serial.println("Web server started");
+    webServerStarted = true;
+    
+    // Create web server thread using mbed Thread with 8KB stack
+    webServerThread_ptr = new rtos::Thread(osPriorityNormal, 8192);
+    if (webServerThread_ptr == NULL) {
+      Serial.println("Failed to create web server thread!");
+    } else {
+      webServerThread_ptr->start(callback(webServerThreadFunc));
+      Serial.println("Web server thread created and started");
+    }
+    
+    Serial.println("=== WEB SERVER STARTED ===");
+    Serial.print("Listening on: ");
+    Serial.print(WiFi.localIP());
+    Serial.println(":80");
     Serial.print("Access control panel at: http://");
     Serial.println(WiFi.localIP());
+    Serial.println("==========================");
   } else {
     Serial.println("\nWiFi failed!");
     Screen.print(3, "WiFi failed!");
+    webServerStarted = false;
   }
   
   // Main loop with sensor reading and MQTT publishing
@@ -843,13 +1043,13 @@ int main() {
   while (1) {
     unsigned long now = millis();
     
-    // Handle web server requests
-    if (WiFi.status() == WL_CONNECTED) {
-      handleWebServer();
-    }
+    // Manage WiFi connection with retry logic
+    manageWiFi();
     
-    // Try to connect MQTT if not connected
-    if (!mqttConnected && WiFi.status() == WL_CONNECTED) {
+    // Try to connect MQTT if not connected (non-blocking retry)
+    static unsigned long lastMqttAttempt = 0;
+    if (!mqttConnected && WiFi.status() == WL_CONNECTED && (now - lastMqttAttempt > 10000)) {
+      lastMqttAttempt = now;
       Serial.println("Attempting MQTT connection...");
       Serial.print("Device IP: ");
       Serial.println(WiFi.localIP());
@@ -863,17 +1063,17 @@ int main() {
         if (displayEnabled) {
           Screen.print(2, "MQTT connected!");
         }
+        Serial.println("MQTT connected successfully!");
       } else {
         if (displayEnabled) {
           Screen.print(2, "MQTT failed!");
         }
-        // Wait 10 seconds before trying again
-        delay(10000);
+        Serial.println("MQTT connection failed, will retry in 10 seconds");
       }
     }
-    
-    // Read sensors every 5 seconds
-    if (now - lastSensorRead > 5000) {
+
+    // Read sensors every 30 seconds
+    if (now - lastSensorRead > 30000) {
       lastSensorRead = now;
       
       Serial.print("\n=== Sensor Reading #");
@@ -974,6 +1174,15 @@ int main() {
         char pressStr[32];
         sprintf(pressStr, "P:%.0fmbar", pressure);
         Screen.print(2, pressStr);
+        
+        // Show IP address on line 3 if connected
+        if (WiFi.status() == WL_CONNECTED) {
+          char ipStr[32];
+          sprintf(ipStr, "IP:%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
+          Screen.print(3, ipStr);
+        } else {
+          Screen.print(3, "WiFi: Connecting...");
+        }
       }
       
       counter++;
@@ -999,16 +1208,13 @@ int main() {
       Serial.println(jsonPayload);
       
       if (publishMQTT(config.mqttTopic, jsonPayload)) {
-        if (displayEnabled) {
-          Screen.print(3, "MQTT sent!");
-        }
         Serial.println("MQTT published successfully");
       } else {
+        Serial.println("MQTT publish failed, will retry");
         if (displayEnabled) {
           Screen.print(3, "MQTT failed!");
         }
-        mqttConnected = false;  // Reconnect next time
-        Serial.println("MQTT publish failed");
+        // Don't disconnect - just retry next time
       }
     }
     
@@ -1025,11 +1231,13 @@ int main() {
       }
     }
     
-    delay(100);  // Small delay to prevent tight loop
+    delay(50);   // Reasonable delay for stable operation
   }
   
   return 0;
 }
+
+
 
 // Override Arduino setup/loop to prevent them from running
 void setup() {
