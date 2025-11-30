@@ -681,26 +681,31 @@ void sendWebPage(WiFiClient &client) {
   Serial.println(sendStart);
   
   // Build body with simplified HTML
-  char body[1200];
+  // Device has 256KB RAM - use generous buffer to prevent any truncation
+  // Base HTML + all variables with safety margin = 2048 bytes
+  char body[2048];
   int bodyLen = snprintf(body, sizeof(body),
-    "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width'><title>%s</title>"
-    "<style>body{font-family:Arial;margin:15px;background:#f5f5f7}"
-    ".c{background:#fff;border-radius:8px;padding:12px;margin-bottom:10px}"
-    "h2{margin:0 0 6px;font-size:18px}"
-    ".s{font-size:11px;color:#666;margin-bottom:8px}"
-    ".b{padding:2px 5px;border-radius:3px;font-size:10px;font-weight:600}"
+    "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>%s</title>"
+    "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
+    ".c{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}"
+    "h2{margin:0 0 8px;font-size:20px;font-weight:600}"
+    ".s{font-size:13px;color:#666;margin-bottom:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}"
+    ".b{padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap}"
     ".on{background:#34c759;color:#fff}.off{background:#ff3b30;color:#fff}"
-    "a{display:block;padding:12px;margin:6px 0;border-radius:6px;text-decoration:none;text-align:center;font-weight:600;font-size:14px}"
+    "form{margin:8px 0}"
+    "button{display:block;width:100%%;padding:14px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:16px;cursor:pointer;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent}"
+    "button:active{opacity:0.7}"
     ".g{background:#34c759;color:#fff}.r{background:#ff3b30;color:#fff}.u{background:#007aff;color:#fff}"
+    "@media(min-width:400px){body{padding:15px}.c{padding:20px}button{font-size:15px}}"
     "</style></head><body>"
     "<div class='c'><h2>%s</h2>"
-    "<div class='s'>MQTT: <span class='b %s'>%s</span> | %s</div></div>"
+    "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div></div>"
     "<div class='c'>"
-    "<a href='/led?state=on' class='g'>LED ON</a>"
-    "<a href='/led?state=off' class='r'>LED OFF</a>"
-    "<a href='/display?state=on' class='g'>Display ON</a>"
-    "<a href='/display?state=off' class='r'>Display OFF</a>"
-    "<a href='/reset' class='u'>RESET</a>"
+    "<form action='/led' method='GET'><input type='hidden' name='state' value='on'><button class='g'>LED ON</button></form>"
+    "<form action='/led' method='GET'><input type='hidden' name='state' value='off'><button class='r'>LED OFF</button></form>"
+    "<form action='/display' method='GET'><input type='hidden' name='state' value='on'><button class='g'>Display ON</button></form>"
+    "<form action='/display' method='GET'><input type='hidden' name='state' value='off'><button class='r'>Display OFF</button></form>"
+    "<form action='/reset' method='GET'><button class='u'>RESET</button></form>"
     "</div></body></html>",
     config.deviceId,
     config.deviceId,
