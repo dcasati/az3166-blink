@@ -674,18 +674,59 @@ bool publishMQTT(const char* topic, const char* payload) {
 
 // Web server functions - optimized for speed
 
-
-void sendWebPage(WiFiClient &client) {
-  unsigned long sendStart = millis();
-  Serial.print("Sending web page at ");
-  Serial.println(sendStart);
+void sendMainPage(WiFiClient &client) {
+  Serial.println("Sending main page");
   
-  // Build body with simplified HTML
-  // Device has 256KB RAM - use generous buffer to prevent any truncation
-  // Base HTML + all variables with safety margin = 2048 bytes
-  char body[2048];
+  char body[1536];
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>%s</title>"
+    "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:20px;background:#f5f5f7;max-width:500px;margin:0 auto;text-align:center}"
+    ".c{background:#fff;border-radius:12px;padding:30px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}"
+    "h1{margin:0 0 8px;font-size:24px;font-weight:600}"
+    ".s{font-size:13px;color:#666;margin-bottom:16px;display:flex;align-items:center;gap:8px;justify-content:center;flex-wrap:wrap}"
+    ".b{padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap}"
+    ".on{background:#34c759;color:#fff}.off{background:#ff3b30;color:#fff}"
+    "a{display:block;width:100%%;padding:18px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:18px;cursor:pointer;margin:12px 0;text-decoration:none;transition:opacity 0.2s}"
+    "a:active{opacity:0.7}"
+    ".btn-b{background:#007aff;color:#fff}.btn-o{background:#ff9500;color:#fff}"
+    "</style></head><body>"
+    "<div class='c'><h1>%s</h1>"
+    "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div>"
+    "<a href='/control' class='btn-b'>CONTROL</a>"
+    "<a href='/telemetry' style='background:#5856d6;color:#fff'>TELEMETRY</a>"
+    "<a href='/setup' class='btn-o'>SETUP</a>"
+    "</div></body></html>",
+    config.deviceId, config.deviceId,
+    mqttConnected ? "on" : "off",
+    mqttConnected ? "CONNECTED" : "DISCONNECTED",
+    config.mqttServer);
+  
+  // If snprintf would have written more than buffer size, use actual buffer size
+  if (bodyLen >= (int)sizeof(body)) {
+    bodyLen = sizeof(body) - 1;
+    Serial.print("WARNING: Main page HTML truncated! Buffer size: ");
+    Serial.println(sizeof(body));
+  }
+  
+  Serial.print("Main page HTML size: ");
+  Serial.println(bodyLen);
+  
+  char header[160];
+  int headerLen = snprintf(header, sizeof(header),
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
+  
+  client.write((const uint8_t*)header, headerLen);
+  client.write((const uint8_t*)body, bodyLen);
+  client.flush();
+  Serial.println("Main page sent!");
+}
+
+void sendControlPage(WiFiClient &client) {
+  Serial.println("Sending control page");
+  
+  char body[2560];
+  int bodyLen = snprintf(body, sizeof(body),
+    "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Control - %s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
     ".c{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}"
     "h2{margin:0 0 8px;font-size:20px;font-weight:600}"
@@ -693,10 +734,10 @@ void sendWebPage(WiFiClient &client) {
     ".b{padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap}"
     ".on{background:#34c759;color:#fff}.off{background:#ff3b30;color:#fff}"
     "form{margin:8px 0}"
-    "button{display:block;width:100%%;padding:14px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:16px;cursor:pointer;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent}"
-    "button:active{opacity:0.7}"
-    ".g{background:#34c759;color:#fff}.r{background:#ff3b30;color:#fff}.u{background:#007aff;color:#fff}"
-    "@media(min-width:400px){body{padding:15px}.c{padding:20px}button{font-size:15px}}"
+    "button,a{display:block;width:100%%;padding:14px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:16px;cursor:pointer;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent;text-decoration:none}"
+    "button:active,a:active{opacity:0.7}"
+    ".g{background:#34c759;color:#fff}.r{background:#ff3b30;color:#fff}.u{background:#007aff;color:#fff}.gray{background:#8e8e93;color:#fff}"
+    "@media(min-width:400px){body{padding:15px}.c{padding:20px}button,a{font-size:15px}}"
     "</style></head><body>"
     "<div class='c'><h2>%s</h2>"
     "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div></div>"
@@ -706,48 +747,205 @@ void sendWebPage(WiFiClient &client) {
     "<form action='/display' method='GET'><input type='hidden' name='state' value='on'><button class='g'>Display ON</button></form>"
     "<form action='/display' method='GET'><input type='hidden' name='state' value='off'><button class='r'>Display OFF</button></form>"
     "<form action='/reset' method='GET'><button class='u'>RESET</button></form>"
+    "<a href='/' class='gray'>BACK</a>"
     "</div></body></html>",
     config.deviceId,
     config.deviceId,
     mqttConnected ? "on" : "off",
     mqttConnected ? "CONNECTED" : "DISCONNECTED",
     config.mqttServer);
-  if (bodyLen < 0) {
+  
+  if (bodyLen < 0 || bodyLen >= (int)sizeof(body)) {
     bodyLen = strlen(body);
-    Serial.println("Body snprintf error, using strlen");
-  } else if (bodyLen >= (int)sizeof(body)) {
-    bodyLen = sizeof(body) - 1;
-    Serial.print("Body truncated! Needed: ");
-    Serial.print(bodyLen);
-    Serial.print(", buffer: ");
-    Serial.println(sizeof(body));
-  } else {
-    Serial.print("Body length: ");
-    Serial.println(bodyLen);
   }
   
-  // Build header with explicit Content-Length
   char header[160];
   int headerLen = snprintf(header, sizeof(header),
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: text/html\r\n"
-    "Connection: close\r\n"
-    "Content-Length: %d\r\n"
-    "\r\n",
-    bodyLen);
-  if (headerLen < 0) {
-    headerLen = strlen(header);
-    Serial.println("Header snprintf error, using strlen");
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
+  
+  client.write((const uint8_t*)header, headerLen);
+  client.write((const uint8_t*)body, bodyLen);
+  client.flush();
+  Serial.println("Control page sent!");
+}
+
+void sendTelemetryPage(WiFiClient &client) {
+  Serial.println("Sending telemetry page");
+  
+  char body[2048];
+  int bodyLen = snprintf(body, sizeof(body),
+    "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Telemetry - %s</title>"
+    "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
+    ".c{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}"
+    "h2{margin:0 0 12px;font-size:20px;font-weight:600}"
+    "h3{margin:16px 0 8px;font-size:16px;font-weight:600;color:#666}"
+    ".row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f0f0}"
+    ".row:last-child{border-bottom:none}"
+    ".label{font-weight:600;color:#333}"
+    ".value{color:#666}"
+    "a{display:block;width:100%%;padding:14px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:16px;cursor:pointer;transition:opacity 0.2s;text-decoration:none;margin-top:12px}"
+    "a:active{opacity:0.7}"
+    ".gray{background:#8e8e93;color:#fff}"
+    "</style></head><body>"
+    "<div class='c'><h2>Telemetry Data</h2>"
+    "<h3>Environment</h3>"
+    "<div class='row'><span class='label'>Temperature</span><span class='value'>%.2f C</span></div>"
+    "<div class='row'><span class='label'>Humidity</span><span class='value'>%.2f %%</span></div>"
+    "<div class='row'><span class='label'>Pressure</span><span class='value'>%.2f mbar</span></div>"
+    "<h3>Accelerometer</h3>"
+    "<div class='row'><span class='label'>X-axis</span><span class='value'>%.3f g</span></div>"
+    "<div class='row'><span class='label'>Y-axis</span><span class='value'>%.3f g</span></div>"
+    "<div class='row'><span class='label'>Z-axis</span><span class='value'>%.3f g</span></div>"
+    "<h3>Gyroscope</h3>"
+    "<div class='row'><span class='label'>X-axis</span><span class='value'>%.2f dps</span></div>"
+    "<div class='row'><span class='label'>Y-axis</span><span class='value'>%.2f dps</span></div>"
+    "<div class='row'><span class='label'>Z-axis</span><span class='value'>%.2f dps</span></div>"
+    "<h3>Magnetometer</h3>"
+    "<div class='row'><span class='label'>X-axis</span><span class='value'>%.3f G</span></div>"
+    "<div class='row'><span class='label'>Y-axis</span><span class='value'>%.3f G</span></div>"
+    "<div class='row'><span class='label'>Z-axis</span><span class='value'>%.3f G</span></div>"
+    "</div>"
+    "<a href='/' class='gray'>BACK</a>"
+    "</body></html>",
+    config.deviceId,
+    lastTemperature, lastHumidity, lastPressure,
+    lastAccelX, lastAccelY, lastAccelZ,
+    lastGyroX, lastGyroY, lastGyroZ,
+    lastMagX, lastMagY, lastMagZ);
+  
+  if (bodyLen >= (int)sizeof(body)) {
+    bodyLen = sizeof(body) - 1;
+    Serial.print("WARNING: Telemetry page HTML truncated! Buffer size: ");
+    Serial.println(sizeof(body));
   }
   
-  size_t written = client.write((const uint8_t*)header, headerLen);
-  written += client.write((const uint8_t*)body, bodyLen);
+  Serial.print("Telemetry page HTML size: ");
+  Serial.println(bodyLen);
+  
+  char header[160];
+  int headerLen = snprintf(header, sizeof(header),
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
+  
+  client.write((const uint8_t*)header, headerLen);
+  client.write((const uint8_t*)body, bodyLen);
   client.flush();
-  Serial.print("Total bytes written: ");
-  Serial.println(written);
-  Serial.print("Send duration: ");
-  Serial.println(millis() - sendStart);
-  Serial.println("Web page sent!");
+  Serial.println("Telemetry page sent!");
+}
+
+void sendSetupPage(WiFiClient &client) {
+  unsigned long sendStart = millis();
+  Serial.print("Sending setup page at ");
+  Serial.println(sendStart);
+  
+  // Larger buffer for setup page with form inputs
+  char body[3072];
+  int bodyLen = snprintf(body, sizeof(body),
+    "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Setup - %s</title>"
+    "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
+    ".c{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}"
+    "h2{margin:0 0 12px;font-size:20px;font-weight:600}"
+    "label{display:block;font-size:13px;font-weight:600;color:#333;margin:12px 0 4px}"
+    "input{width:100%%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px}"
+    "input:focus{outline:none;border-color:#007aff}"
+    "button,a{display:block;width:100%%;padding:14px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:16px;cursor:pointer;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent;text-decoration:none;margin-top:12px}"
+    "button:active,a:active{opacity:0.7}"
+    ".g{background:#34c759;color:#fff}.gray{background:#8e8e93;color:#fff}"
+    ".note{font-size:12px;color:#999;margin-top:8px}"
+    "@media(min-width:400px){body{padding:15px}.c{padding:20px}}"
+    "</style></head><body>"
+    "<div class='c'><h2>Device Setup</h2>"
+    "<form action='/save-config' method='GET'>"
+    "<label>Device ID</label><input name='deviceId' value='%s' maxlength='31'>"
+    "<label>Model</label><input name='model' value='%s' maxlength='15'>"
+    "<label>Location</label><input name='location' value='%s' maxlength='31'>"
+    "<label>WiFi SSID</label><input name='ssid' value='%s' maxlength='31'>"
+    "<label>WiFi Password</label><input name='password' type='password' value='%s' maxlength='63'>"
+    "<label>MQTT Server</label><input name='mqttServer' value='%s' maxlength='63'>"
+    "<label>MQTT Port</label><input name='mqttPort' type='number' value='%d' min='1' max='65535'>"
+    "<label>MQTT Topic</label><input name='mqttTopic' value='%s' maxlength='63'>"
+    "<button class='g'>SAVE & REBOOT</button>"
+    "</form>"
+    "<p class='note'>Saving will write configuration to Flash memory and reboot the device.</p>"
+    "<a href='/' class='gray'>CANCEL</a>"
+    "</div></body></html>",
+    config.deviceId,
+    config.deviceId, config.model, config.location,
+    config.ssid, config.password, config.mqttServer,
+    config.mqttPort, config.mqttTopic);
+  
+  if (bodyLen < 0 || bodyLen >= (int)sizeof(body)) {
+    bodyLen = strlen(body);
+  }
+  
+  char header[160];
+  int headerLen = snprintf(header, sizeof(header),
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
+  
+  client.write((const uint8_t*)header, headerLen);
+  client.write((const uint8_t*)body, bodyLen);
+  client.flush();
+  Serial.println("Setup page sent!");
+}
+
+void sendSuccessPage(WiFiClient &client) {
+  char body[512];
+  int bodyLen = snprintf(body, sizeof(body),
+    "<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Saved</title>"
+    "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:20px;background:#f5f5f7;max-width:500px;margin:0 auto;text-align:center}"
+    ".c{background:#fff;border-radius:12px;padding:30px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}"
+    "h2{color:#34c759;margin:0 0 12px}"
+    "p{color:#666;margin:0}"
+    "</style></head><body>"
+    "<div class='c'><h2>Configuration Saved!</h2>"
+    "<p>Redirecting to home...</p></div></body></html>");
+  
+  if (bodyLen < 0 || bodyLen >= (int)sizeof(body)) {
+    bodyLen = strlen(body);
+  }
+  
+  char header[160];
+  int headerLen = snprintf(header, sizeof(header),
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
+  
+  client.write((const uint8_t*)header, headerLen);
+  client.write((const uint8_t*)body, bodyLen);
+  client.flush();
+}
+
+// URL decode helper function
+void urlDecode(char* dst, const char* src, int maxLen) {
+  int i = 0, j = 0;
+  while (src[i] && j < maxLen - 1) {
+    if (src[i] == '%' && src[i+1] && src[i+2]) {
+      char hex[3] = {src[i+1], src[i+2], 0};
+      dst[j++] = (char)strtol(hex, NULL, 16);
+      i += 3;
+    } else if (src[i] == '+') {
+      dst[j++] = ' ';
+      i++;
+    } else {
+      dst[j++] = src[i++];
+    }
+  }
+  dst[j] = 0;
+}
+
+// Parse query parameter helper
+bool getQueryParam(const String& request, const char* param, char* value, int maxLen) {
+  String searchStr = String(param) + "=";
+  int startIdx = request.indexOf(searchStr);
+  if (startIdx == -1) return false;
+  
+  startIdx += searchStr.length();
+  int endIdx = request.indexOf('&', startIdx);
+  if (endIdx == -1) {
+    endIdx = request.indexOf(' ', startIdx);
+  }
+  if (endIdx == -1) return false;
+  
+  String encoded = request.substring(startIdx, endIdx);
+  urlDecode(value, encoded.c_str(), maxLen);
+  return true;
 }
 
 // WiFi management function with retry logic
@@ -842,7 +1040,7 @@ void webServerThreadFunc() {
         // Read request line
         String request = "";
         unsigned long readStart = millis();
-        while (client.available() && request.length() < 256 && millis() - readStart < 50) {
+        while (client.available() && request.length() < 512 && millis() - readStart < 100) {
           char c = client.read();
           if (c == '\r') continue;
           if (c == '\n') break;
@@ -874,14 +1072,131 @@ void webServerThreadFunc() {
         if (request.length() > 0) {
           unsigned long now = millis();
           
-          if (request.indexOf("/led?state=on") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
+          // Route: Main page
+          if (request.indexOf("GET / ") == 0) {
+            Serial.println("Serving main page");
+            sendMainPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
+          
+          // Route: Control page
+          else if (request.indexOf("GET /control ") == 0) {
+            Serial.println("Serving control page");
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
+          
+          // Route: Telemetry page
+          else if (request.indexOf("GET /telemetry ") == 0) {
+            Serial.println("Serving telemetry page");
+            sendTelemetryPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
+          
+          // Route: Setup page
+          else if (request.indexOf("GET /setup ") == 0) {
+            Serial.println("Serving setup page");
+            sendSetupPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
+          
+          // Route: Save configuration
+          else if (request.indexOf("GET /save-config?") == 0) {
+            Serial.println("Saving configuration from web form...");
+            
+            // Parse all parameters
+            char tempBuffer[64];
+            
+            if (getQueryParam(request, "deviceId", tempBuffer, sizeof(tempBuffer))) {
+              strncpy(config.deviceId, tempBuffer, sizeof(config.deviceId) - 1);
+              config.deviceId[sizeof(config.deviceId) - 1] = 0;
+            }
+            if (getQueryParam(request, "model", tempBuffer, sizeof(tempBuffer))) {
+              strncpy(config.model, tempBuffer, sizeof(config.model) - 1);
+              config.model[sizeof(config.model) - 1] = 0;
+            }
+            if (getQueryParam(request, "location", tempBuffer, sizeof(tempBuffer))) {
+              strncpy(config.location, tempBuffer, sizeof(config.location) - 1);
+              config.location[sizeof(config.location) - 1] = 0;
+            }
+            if (getQueryParam(request, "ssid", tempBuffer, sizeof(tempBuffer))) {
+              strncpy(config.ssid, tempBuffer, sizeof(config.ssid) - 1);
+              config.ssid[sizeof(config.ssid) - 1] = 0;
+            }
+            if (getQueryParam(request, "password", tempBuffer, sizeof(tempBuffer))) {
+              strncpy(config.password, tempBuffer, sizeof(config.password) - 1);
+              config.password[sizeof(config.password) - 1] = 0;
+            }
+            if (getQueryParam(request, "mqttServer", tempBuffer, sizeof(tempBuffer))) {
+              strncpy(config.mqttServer, tempBuffer, sizeof(config.mqttServer) - 1);
+              config.mqttServer[sizeof(config.mqttServer) - 1] = 0;
+            }
+            if (getQueryParam(request, "mqttPort", tempBuffer, sizeof(tempBuffer))) {
+              int port = atoi(tempBuffer);
+              if (port > 0 && port <= 65535) {
+                config.mqttPort = port;
+              }
+            }
+            if (getQueryParam(request, "mqttTopic", tempBuffer, sizeof(tempBuffer))) {
+              strncpy(config.mqttTopic, tempBuffer, sizeof(config.mqttTopic) - 1);
+              config.mqttTopic[sizeof(config.mqttTopic) - 1] = 0;
+            }
+            
+            // Save to Flash
+            Serial.println("Writing configuration to Flash...");
+            if (saveConfigToFlash()) {
+              Serial.println("Configuration saved successfully!");
+              sendSuccessPage(client);
+              client.flush();
+              Thread::wait(10);
+              client.stop();
+            } else {
+              Serial.println("Failed to save configuration!");
+              sendMainPage(client);
+              client.flush();
+              Thread::wait(10);
+              client.stop();
+            }
+            continue;
+          }
+          
+          // Control commands with debouncing
+          else if (request.indexOf("/led?state=on") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
             ledEnabled = true;
             lastLedChange = now;
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
           }
           else if (request.indexOf("/led?state=off") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
             ledEnabled = false;
             rgbLED.turnOff();
             lastLedChange = now;
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
           }
           else if (request.indexOf("/display?state=on") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
             displayEnabled = true;
@@ -894,15 +1209,27 @@ void webServerThreadFunc() {
               sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
               Screen.print(3, ipStr);
             }
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
           }
           else if (request.indexOf("/display?state=off") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
             displayEnabled = false;
             lastDisplayChange = now;
             Screen.clean();
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
           }
           else if (request.indexOf("/reset") > 0) {
             Serial.println("RESET requested via web interface");
-            sendWebPage(client);
+            sendControlPage(client);
             client.flush();
             Thread::wait(10);
             client.stop();
@@ -911,8 +1238,8 @@ void webServerThreadFunc() {
           }
         }
         
-        Serial.println("Responding with web page...");
-        sendWebPage(client);
+        Serial.println("Responding with main page...");
+        sendMainPage(client);
         client.flush();
         Thread::wait(10);
         client.stop();
@@ -924,13 +1251,17 @@ void webServerThreadFunc() {
   }
 }
 
-// Custom main function to bypass Azure framework
-int main() {
+// Arduino setup function - called once at startup
+void setup() {
   // Initialize hardware
   Serial.begin(115200);
-  delay(1000);
+  delay(2000);
   
-  Serial.println("=== PURE STM32 CODE ===");
+  Serial.println("\n\n\n");
+  Serial.println("=================================");
+  Serial.println("=== PURE STM32 CODE STARTING ===");
+  Serial.println("=================================");
+  Serial.println("\n");
   
   // Try to load configuration from Flash first
   if (!loadConfigFromFlash()) {
@@ -1039,19 +1370,20 @@ int main() {
     Screen.print(3, "WiFi failed!");
     webServerStarted = false;
   }
+}
+
+// Arduino loop function - called repeatedly
+void loop() {
+  static int counter = 0;
+  static unsigned long lastSensorRead = 0;
+  static unsigned long lastMqttPublish = 0;  // Separate timer for MQTT
   
-  // Main loop with sensor reading and MQTT publishing
-  int counter = 0;
-  unsigned long lastSensorRead = 0;
-  unsigned long lastMqttPublish = 0;  // Separate timer for MQTT
+  unsigned long now = millis();
   
-  while (1) {
-    unsigned long now = millis();
-    
-    // Manage WiFi connection with retry logic
-    manageWiFi();
-    
-    // Try to connect MQTT if not connected (non-blocking retry)
+  // Manage WiFi connection with retry logic
+  manageWiFi();
+  
+  // Try to connect MQTT if not connected (non-blocking retry)
     static unsigned long lastMqttAttempt = 0;
     if (!mqttConnected && WiFi.status() == WL_CONNECTED && (now - lastMqttAttempt > 10000)) {
       lastMqttAttempt = now;
@@ -1232,23 +1564,9 @@ int main() {
       if (ledState) {
         rgbLED.setColor(0, 255, 0);  // Green when on
       } else {
-        rgbLED.turnOff();    // Off
-      }
+      rgbLED.turnOff();    // Off
     }
-    
-    delay(50);   // Reasonable delay for stable operation
   }
   
-  return 0;
-}
-
-
-
-// Override Arduino setup/loop to prevent them from running
-void setup() {
-  // This should never be called
-}
-
-void loop() {
-  // This should never be called
+  delay(50);   // Reasonable delay for stable operation
 }
