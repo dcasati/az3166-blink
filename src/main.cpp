@@ -10,6 +10,9 @@
 #include "rtos.h"
 #include "Thread.h"
 
+// Firmware version
+#define FIRMWARE_VERSION "1.0.0"
+
 // Web server
 WiFiServer webServer(80);
 
@@ -264,6 +267,9 @@ RGB_LED rgbLED;
 bool ledEnabled = true;
 bool displayEnabled = true;
 bool mqttConnected = false;  // Global MQTT connection status
+bool wifiLedEnabled = false;  // WiFi LED control
+bool azureLedEnabled = false; // Azure LED control
+bool userLedEnabled = false;  // User LED control
 
 // Debounce variables to prevent rapid toggling
 unsigned long lastLedChange = 0;
@@ -289,6 +295,17 @@ float lastMagX = 0.0, lastMagY = 0.0, lastMagZ = 0.0;
 // Adjust these values to match your local conditions
 const float PRESSURE_OFFSET = 141.0; // mbar offset to correct sensor reading
 const float TEMPERATURE_OFFSET = -2.0; // °C offset to correct temperature reading
+
+// Force front-panel status LEDs (Wi-Fi, Azure, User) off
+void disableStatusLedsOnce()
+{
+  pinMode(LED_WIFI,  OUTPUT);
+  pinMode(LED_AZURE, OUTPUT);
+  pinMode(LED_USER,  OUTPUT);
+  digitalWrite(LED_WIFI,  LOW);
+  digitalWrite(LED_AZURE, LOW);
+  digitalWrite(LED_USER,  LOW);
+}
 
 // Configuration management functions
 uint8_t calculateChecksum(const DeviceConfig* cfg) {
@@ -705,7 +722,7 @@ void sendHttpHeader(WiFiClient &client, int contentLength, const char *contentTy
 void sendMainPage(WiFiClient &client) {
   Serial.println("Sending main page");
   
-  char body[1536];
+  char body[1600];
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>%s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:20px;background:#f5f5f7;max-width:500px;margin:0 auto;text-align:center}"
@@ -716,18 +733,19 @@ void sendMainPage(WiFiClient &client) {
     ".on{background:#34c759;color:#fff}.off{background:#ff3b30;color:#fff}"
     "a{display:block;width:100%%;padding:18px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:18px;cursor:pointer;margin:12px 0;text-decoration:none;transition:opacity 0.2s}"
     "a:active{opacity:0.7}"
-    ".btn-b{background:#007aff;color:#fff}.btn-o{background:#ff9500;color:#fff}"
+    ".btn-b{background:#007aff;color:#fff}.btn-o{background:#ff9500;color:#fff}.ver{font-size:11px;color:#999;margin-top:16px}"
     "</style></head><body>"
     "<div class='c'><h1>%s</h1>"
     "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div>"
     "<a href='/control' class='btn-b'>CONTROL</a>"
     "<a href='/telemetry' style='background:#5856d6;color:#fff'>TELEMETRY</a>"
     "<a href='/setup' class='btn-o'>SETUP</a>"
+    "<div class='ver'>v%s</div>"
     "</div></body></html>",
     config.deviceId, config.deviceId,
     mqttConnected ? "on" : "off",
     mqttConnected ? "CONNECTED" : "DISCONNECTED",
-    config.mqttServer);
+    config.mqttServer, FIRMWARE_VERSION);
   
   if (bodyLen < 0) {
     bodyLen = 0;
@@ -749,7 +767,8 @@ void sendMainPage(WiFiClient &client) {
 void sendControlPage(WiFiClient &client) {
   Serial.println("Sending control page");
   
-  char body[2560];
+  char body[3200];
+  
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Control - %s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
@@ -758,20 +777,27 @@ void sendControlPage(WiFiClient &client) {
     ".s{font-size:13px;color:#666;margin-bottom:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}"
     ".b{padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap}"
     ".on{background:#34c759;color:#fff}.off{background:#ff3b30;color:#fff}"
-    "form{margin:8px 0}"
-    "button,a{display:block;width:100%%;padding:14px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:16px;cursor:pointer;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent;text-decoration:none}"
+    ".row{display:flex;gap:8px;margin:8px 0}"
+    "form{flex:1;margin:0}"
+    "button,a{display:block;width:100%%;padding:14px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:16px;cursor:pointer;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent;text-decoration:none;margin:0}"
     "button:active,a:active{opacity:0.7}"
-    ".g{background:#34c759;color:#fff}.r{background:#ff3b30;color:#fff}.u{background:#007aff;color:#fff}.gray{background:#8e8e93;color:#fff}"
+    ".g{background:#007aff;color:#fff}.r{background:#8e8e93;color:#fff}.u{background:#007aff;color:#fff}.gray{background:#8e8e93;color:#fff}"
     "@media(min-width:400px){body{padding:15px}.c{padding:20px}button,a{font-size:15px}}"
     "</style></head><body>"
     "<div class='c'><h2>%s</h2>"
     "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div></div>"
     "<div class='c'>"
-    "<form action='/led' method='GET'><input type='hidden' name='state' value='on'><button class='g'>LED ON</button></form>"
-    "<form action='/led' method='GET'><input type='hidden' name='state' value='off'><button class='r'>LED OFF</button></form>"
-    "<form action='/display' method='GET'><input type='hidden' name='state' value='on'><button class='g'>Display ON</button></form>"
-    "<form action='/display' method='GET'><input type='hidden' name='state' value='off'><button class='r'>Display OFF</button></form>"
-    "<form action='/reset' method='GET'><button class='u'>RESET</button></form>"
+    "<div class='row'><form action='/led' method='GET'><input type='hidden' name='state' value='on'><button class='g'>LED ON</button></form>"
+    "<form action='/led' method='GET'><input type='hidden' name='state' value='off'><button class='r'>LED OFF</button></form></div>"
+    "<div class='row'><form action='/display' method='GET'><input type='hidden' name='state' value='on'><button class='g'>Display ON</button></form>"
+    "<form action='/display' method='GET'><input type='hidden' name='state' value='off'><button class='r'>Display OFF</button></form></div>"
+    "<div class='row'><form action='/wifiled' method='GET'><input type='hidden' name='state' value='on'><button class='g'>WiFi LED ON</button></form>"
+    "<form action='/wifiled' method='GET'><input type='hidden' name='state' value='off'><button class='r'>WiFi LED OFF</button></form></div>"
+    "<div class='row'><form action='/azureled' method='GET'><input type='hidden' name='state' value='on'><button class='g'>Azure LED ON</button></form>"
+    "<form action='/azureled' method='GET'><input type='hidden' name='state' value='off'><button class='r'>Azure LED OFF</button></form></div>"
+    "<div class='row'><form action='/userled' method='GET'><input type='hidden' name='state' value='on'><button class='g'>User LED ON</button></form>"
+    "<form action='/userled' method='GET'><input type='hidden' name='state' value='off'><button class='r'>User LED OFF</button></form></div>"
+    "<form action='/reset' method='GET' style='margin:16px 0 8px'><button class='u'>RESET</button></form>"
     "<a href='/' class='gray'>BACK</a>"
     "</div></body></html>",
     config.deviceId,
@@ -800,7 +826,7 @@ void sendControlPage(WiFiClient &client) {
 void sendTelemetryPage(WiFiClient &client) {
   Serial.println("Sending telemetry page");
   
-  char body[2048];
+  char body[2560];
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Telemetry - %s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
@@ -832,6 +858,7 @@ void sendTelemetryPage(WiFiClient &client) {
     "<div class='row'><span class='label'>X-axis</span><span class='value'>%.3f G</span></div>"
     "<div class='row'><span class='label'>Y-axis</span><span class='value'>%.3f G</span></div>"
     "<div class='row'><span class='label'>Z-axis</span><span class='value'>%.3f G</span></div>"
+    "</div>"
     "</div>"
     "<a href='/' class='gray'>BACK</a>"
     "</body></html>",
@@ -1083,8 +1110,11 @@ void webServerThreadFunc() {
         Serial.print("HTTP request line: ");
         Serial.println(requestLine);
         
-        // Only support GET for now
-        if (!requestLine.startsWith("GET ")) {
+        // Parse HTTP method and path
+        bool isPost = requestLine.startsWith("POST ");
+        bool isGet = requestLine.startsWith("GET ");
+        
+        if (!isGet && !isPost) {
           Serial.println("Unsupported HTTP method, closing");
           client.stop();
           continue;
@@ -1114,7 +1144,8 @@ void webServerThreadFunc() {
         Serial.print("Normalized path: ");
         Serial.println(path);
         
-        // Consume headers
+        // Parse headers (need Content-Length for POST requests)
+        size_t contentLength = 0;
         String headerLine = "";
         unsigned long headerStart = millis();
         while (client.connected() && millis() - headerStart < 100) {
@@ -1125,7 +1156,17 @@ void webServerThreadFunc() {
           char c = client.read();
           if (c == '\r') continue;
           if (c == '\n') {
-            if (headerLine.length() == 0) break;
+            if (headerLine.length() == 0) break; // End of headers
+            
+            // Parse Content-Length header
+            if (isPost && headerLine.startsWith("Content-Length:")) {
+              String lengthStr = headerLine.substring(15);
+              lengthStr.trim();
+              contentLength = (size_t)atoi(lengthStr.c_str());
+              Serial.print("Content-Length: ");
+              Serial.println(contentLength);
+            }
+            
             headerLine = "";
           } else {
             headerLine += c;
@@ -1275,6 +1316,63 @@ void webServerThreadFunc() {
               displayEnabled = false;
               lastDisplayChange = now;
               Screen.clean();
+            }
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
+          else if (path == "/wifiled") {
+            if (fullPath.indexOf("state=on") > 0) {
+              wifiLedEnabled = true;
+              pinMode(LED_WIFI, OUTPUT);
+              digitalWrite(LED_WIFI, HIGH);
+              Serial.println("WiFi LED turned ON");
+            } else if (fullPath.indexOf("state=off") > 0) {
+              wifiLedEnabled = false;
+              pinMode(LED_WIFI, OUTPUT);
+              digitalWrite(LED_WIFI, LOW);
+              Serial.println("WiFi LED turned OFF");
+            }
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
+          else if (path == "/azureled") {
+            if (fullPath.indexOf("state=on") > 0) {
+              azureLedEnabled = true;
+              pinMode(LED_AZURE, OUTPUT);
+              digitalWrite(LED_AZURE, HIGH);
+              Serial.println("Azure LED turned ON");
+            } else if (fullPath.indexOf("state=off") > 0) {
+              azureLedEnabled = false;
+              pinMode(LED_AZURE, OUTPUT);
+              digitalWrite(LED_AZURE, LOW);
+              Serial.println("Azure LED turned OFF");
+            }
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
+          else if (path == "/userled") {
+            if (fullPath.indexOf("state=on") > 0) {
+              userLedEnabled = true;
+              pinMode(LED_USER, OUTPUT);
+              digitalWrite(LED_USER, HIGH);
+              Serial.println("User LED turned ON");
+            } else if (fullPath.indexOf("state=off") > 0) {
+              userLedEnabled = false;
+              pinMode(LED_USER, OUTPUT);
+              digitalWrite(LED_USER, LOW);
+              Serial.println("User LED turned OFF");
             }
             sendControlPage(client);
             client.flush();
@@ -1440,6 +1538,9 @@ void setup() {
     Screen.print(3, "WiFi failed!");
     webServerStarted = false;
   }
+  
+  // After everything is initialized, turn off the status LEDs
+  disableStatusLedsOnce();
 }
 
 // Arduino loop function - called repeatedly
@@ -1449,6 +1550,11 @@ void loop() {
   static unsigned long lastMqttPublish = 0;  // Separate timer for MQTT
   
   unsigned long now = millis();
+  
+  // Keep front-panel LEDs in their current state (only force off if not manually enabled)
+  if (!wifiLedEnabled) digitalWrite(LED_WIFI,  LOW);
+  if (!azureLedEnabled) digitalWrite(LED_AZURE, LOW);
+  if (!userLedEnabled) digitalWrite(LED_USER,  LOW);
   
   // Manage WiFi connection with retry logic
   manageWiFi();
