@@ -10,6 +10,9 @@
 #include "rtos.h"
 #include "Thread.h"
 
+// Firmware version
+#define FIRMWARE_VERSION "1.0.0"
+
 // Web server
 WiFiServer webServer(80);
 
@@ -719,7 +722,7 @@ void sendHttpHeader(WiFiClient &client, int contentLength, const char *contentTy
 void sendMainPage(WiFiClient &client) {
   Serial.println("Sending main page");
   
-  char body[1536];
+  char body[1600];
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>%s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:20px;background:#f5f5f7;max-width:500px;margin:0 auto;text-align:center}"
@@ -730,18 +733,19 @@ void sendMainPage(WiFiClient &client) {
     ".on{background:#34c759;color:#fff}.off{background:#ff3b30;color:#fff}"
     "a{display:block;width:100%%;padding:18px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:18px;cursor:pointer;margin:12px 0;text-decoration:none;transition:opacity 0.2s}"
     "a:active{opacity:0.7}"
-    ".btn-b{background:#007aff;color:#fff}.btn-o{background:#ff9500;color:#fff}"
+    ".btn-b{background:#007aff;color:#fff}.btn-o{background:#ff9500;color:#fff}.ver{font-size:11px;color:#999;margin-top:16px}"
     "</style></head><body>"
     "<div class='c'><h1>%s</h1>"
     "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div>"
     "<a href='/control' class='btn-b'>CONTROL</a>"
     "<a href='/telemetry' style='background:#5856d6;color:#fff'>TELEMETRY</a>"
     "<a href='/setup' class='btn-o'>SETUP</a>"
+    "<div class='ver'>v%s</div>"
     "</div></body></html>",
     config.deviceId, config.deviceId,
     mqttConnected ? "on" : "off",
     mqttConnected ? "CONNECTED" : "DISCONNECTED",
-    config.mqttServer);
+    config.mqttServer, FIRMWARE_VERSION);
   
   if (bodyLen < 0) {
     bodyLen = 0;
@@ -777,7 +781,7 @@ void sendControlPage(WiFiClient &client) {
     "form{flex:1;margin:0}"
     "button,a{display:block;width:100%%;padding:14px;border:none;border-radius:10px;text-align:center;font-weight:600;font-size:16px;cursor:pointer;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent;text-decoration:none;margin:0}"
     "button:active,a:active{opacity:0.7}"
-    ".g{background:#34c759;color:#fff}.r{background:#ff3b30;color:#fff}.u{background:#007aff;color:#fff}.gray{background:#8e8e93;color:#fff}"
+    ".g{background:#007aff;color:#fff}.r{background:#8e8e93;color:#fff}.u{background:#007aff;color:#fff}.gray{background:#8e8e93;color:#fff}"
     "@media(min-width:400px){body{padding:15px}.c{padding:20px}button,a{font-size:15px}}"
     "</style></head><body>"
     "<div class='c'><h2>%s</h2>"
@@ -822,7 +826,7 @@ void sendControlPage(WiFiClient &client) {
 void sendTelemetryPage(WiFiClient &client) {
   Serial.println("Sending telemetry page");
   
-  char body[2048];
+  char body[2560];
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Telemetry - %s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
@@ -854,6 +858,7 @@ void sendTelemetryPage(WiFiClient &client) {
     "<div class='row'><span class='label'>X-axis</span><span class='value'>%.3f G</span></div>"
     "<div class='row'><span class='label'>Y-axis</span><span class='value'>%.3f G</span></div>"
     "<div class='row'><span class='label'>Z-axis</span><span class='value'>%.3f G</span></div>"
+    "</div>"
     "</div>"
     "<a href='/' class='gray'>BACK</a>"
     "</body></html>",
