@@ -1168,9 +1168,6 @@ void webServerThreadFunc() {
           }
         }
         
-#ifdef OTA_ENABLED
-        // Handle POST /ota - firmware upload
-        
         // Process commands
         if (path.length() > 0) {
           unsigned long now = millis();

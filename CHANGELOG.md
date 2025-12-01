@@ -5,32 +5,6 @@ All notable changes to the AZ3166 Sensor Station project will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2025-01-XX
-
-### Added
-- **OTA (Over-The-Air) Firmware Updates**
-  - Bootloader-based dual-slot update system with staging area
-  - CRC32 validation before and after firmware copy
-  - Web-based firmware upload via POST /ota endpoint
-  - Complete OTA memory layout: Bootloader (16KB) + App (240KB) + Staging (240KB) + Metadata (2KB)
-  - Automatic bootloader validation and application jump
-  - Safe update process with rollback protection
-  - Two PlatformIO build environments: `az3166_boot` and `az3166_app`
-  - Custom linker scripts for bootloader (boot_flash.ld) and application (app_flash.ld)
-  - Comprehensive OTA documentation in `OTA_GUIDE.md`
-- File upload UI in Control page for firmware updates with progress tracking
-- Flash helper functions: CRC32 calculation, sector erase, word write operations
-- OTA metadata structure with magic bytes, size, CRC32, version, and flags
-- HTTP POST method support in web server
-
-### Changed
-- HTTP server now supports both GET and POST methods
-- Control page buffer increased from 2560 to 3072 bytes for OTA UI
-- Enhanced HTTP header parsing to extract Content-Length for POST requests
-- Application now links at 0x08004000 instead of 0x08000000 (bootloader at base)
-- Added conditional OTA compilation with `OTA_ENABLED` flag
-- Updated README.md to highlight OTA capability
-
 ## [1.0.0] - 2025-09-10
 
 ### Added

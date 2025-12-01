@@ -12,7 +12,6 @@ A pure STM32-based sensor monitoring solution for the Azure IoT DevKit (MXChip A
 - **WiFi Connectivity**: Direct WiFi connection without Azure dependencies
 - **OLED Display**: Real-time sensor display on the device
 - **Web Control Panel**: Mobile-responsive web UI for device management
-- **OTA Firmware Updates**: Over-The-Air updates via web interface with bootloader validation (see [OTA_GUIDE.md](OTA_GUIDE.md))
 
 ## Hardware Requirements
 
