@@ -674,6 +674,34 @@ bool publishMQTT(const char* topic, const char* payload) {
 
 // Web server functions - optimized for speed
 
+// Standard HTTP 200 header with no-cache semantics
+void sendHttpHeader(WiFiClient &client, int contentLength, const char *contentType = "text/html") {
+  char header[256];
+  
+  int headerLen = snprintf(
+    header,
+    sizeof(header),
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: %s\r\n"
+    "Connection: close\r\n"
+    "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+    "Pragma: no-cache\r\n"
+    "Expires: 0\r\n"
+    "Content-Length: %d\r\n"
+    "\r\n",
+    contentType,
+    contentLength
+  );
+  
+  if (headerLen < 0) {
+    headerLen = 0;
+  } else if (headerLen >= (int)sizeof(header)) {
+    headerLen = sizeof(header) - 1;
+  }
+  
+  client.write((const uint8_t *)header, headerLen);
+}
+
 void sendMainPage(WiFiClient &client) {
   Serial.println("Sending main page");
   
@@ -701,8 +729,9 @@ void sendMainPage(WiFiClient &client) {
     mqttConnected ? "CONNECTED" : "DISCONNECTED",
     config.mqttServer);
   
-  // If snprintf would have written more than buffer size, use actual buffer size
-  if (bodyLen >= (int)sizeof(body)) {
+  if (bodyLen < 0) {
+    bodyLen = 0;
+  } else if (bodyLen >= (int)sizeof(body)) {
     bodyLen = sizeof(body) - 1;
     Serial.print("WARNING: Main page HTML truncated! Buffer size: ");
     Serial.println(sizeof(body));
@@ -711,11 +740,7 @@ void sendMainPage(WiFiClient &client) {
   Serial.print("Main page HTML size: ");
   Serial.println(bodyLen);
   
-  char header[160];
-  int headerLen = snprintf(header, sizeof(header),
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
-  
-  client.write((const uint8_t*)header, headerLen);
+  sendHttpHeader(client, bodyLen, "text/html");
   client.write((const uint8_t*)body, bodyLen);
   client.flush();
   Serial.println("Main page sent!");
@@ -755,15 +780,18 @@ void sendControlPage(WiFiClient &client) {
     mqttConnected ? "CONNECTED" : "DISCONNECTED",
     config.mqttServer);
   
-  if (bodyLen < 0 || bodyLen >= (int)sizeof(body)) {
-    bodyLen = strlen(body);
+  if (bodyLen < 0) {
+    bodyLen = 0;
+  } else if (bodyLen >= (int)sizeof(body)) {
+    bodyLen = sizeof(body) - 1;
+    Serial.print("WARNING: Control page HTML truncated! Buffer size: ");
+    Serial.println(sizeof(body));
   }
   
-  char header[160];
-  int headerLen = snprintf(header, sizeof(header),
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
+  Serial.print("Control page HTML size: ");
+  Serial.println(bodyLen);
   
-  client.write((const uint8_t*)header, headerLen);
+  sendHttpHeader(client, bodyLen, "text/html");
   client.write((const uint8_t*)body, bodyLen);
   client.flush();
   Serial.println("Control page sent!");
@@ -813,7 +841,9 @@ void sendTelemetryPage(WiFiClient &client) {
     lastGyroX, lastGyroY, lastGyroZ,
     lastMagX, lastMagY, lastMagZ);
   
-  if (bodyLen >= (int)sizeof(body)) {
+  if (bodyLen < 0) {
+    bodyLen = 0;
+  } else if (bodyLen >= (int)sizeof(body)) {
     bodyLen = sizeof(body) - 1;
     Serial.print("WARNING: Telemetry page HTML truncated! Buffer size: ");
     Serial.println(sizeof(body));
@@ -822,11 +852,7 @@ void sendTelemetryPage(WiFiClient &client) {
   Serial.print("Telemetry page HTML size: ");
   Serial.println(bodyLen);
   
-  char header[160];
-  int headerLen = snprintf(header, sizeof(header),
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
-  
-  client.write((const uint8_t*)header, headerLen);
+  sendHttpHeader(client, bodyLen, "text/html");
   client.write((const uint8_t*)body, bodyLen);
   client.flush();
   Serial.println("Telemetry page sent!");
@@ -873,15 +899,18 @@ void sendSetupPage(WiFiClient &client) {
     config.ssid, config.password, config.mqttServer,
     config.mqttPort, config.mqttTopic);
   
-  if (bodyLen < 0 || bodyLen >= (int)sizeof(body)) {
-    bodyLen = strlen(body);
+  if (bodyLen < 0) {
+    bodyLen = 0;
+  } else if (bodyLen >= (int)sizeof(body)) {
+    bodyLen = sizeof(body) - 1;
+    Serial.print("WARNING: Setup page HTML truncated! Buffer size: ");
+    Serial.println(sizeof(body));
   }
   
-  char header[160];
-  int headerLen = snprintf(header, sizeof(header),
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
+  Serial.print("Setup page HTML size: ");
+  Serial.println(bodyLen);
   
-  client.write((const uint8_t*)header, headerLen);
+  sendHttpHeader(client, bodyLen, "text/html");
   client.write((const uint8_t*)body, bodyLen);
   client.flush();
   Serial.println("Setup page sent!");
@@ -899,15 +928,18 @@ void sendSuccessPage(WiFiClient &client) {
     "<div class='c'><h2>Configuration Saved!</h2>"
     "<p>Redirecting to home...</p></div></body></html>");
   
-  if (bodyLen < 0 || bodyLen >= (int)sizeof(body)) {
-    bodyLen = strlen(body);
+  if (bodyLen < 0) {
+    bodyLen = 0;
+  } else if (bodyLen >= (int)sizeof(body)) {
+    bodyLen = sizeof(body) - 1;
+    Serial.print("WARNING: Success page HTML truncated! Buffer size: ");
+    Serial.println(sizeof(body));
   }
   
-  char header[160];
-  int headerLen = snprintf(header, sizeof(header),
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", bodyLen);
+  Serial.print("Success page HTML size: ");
+  Serial.println(bodyLen);
   
-  client.write((const uint8_t*)header, headerLen);
+  sendHttpHeader(client, bodyLen, "text/html");
   client.write((const uint8_t*)body, bodyLen);
   client.flush();
 }
@@ -1025,27 +1057,62 @@ void webServerThreadFunc() {
       if (client) {
         Serial.println(">>> Web client connected <<<");
         
-        // Wait briefly for data
+        // Wait up to 2 seconds for incoming data
         unsigned long start = millis();
-        while (!client.available() && client.connected() && millis() - start < 100) {
+        while (!client.available() && client.connected() && (millis() - start < 2000)) {
           Thread::wait(1);
         }
         
         if (!client.available()) {
-          Serial.println("No data received, closing");
+          Serial.println("No data received within timeout, closing");
           client.stop();
           continue;
         }
         
-        // Read request line
-        String request = "";
+        // Read the first request line: "GET /path HTTP/1.1"
+        String requestLine = "";
         unsigned long readStart = millis();
-        while (client.available() && request.length() < 512 && millis() - readStart < 100) {
+        while (client.available() && requestLine.length() < 512 && millis() - readStart < 100) {
           char c = client.read();
           if (c == '\r') continue;
           if (c == '\n') break;
-          request += c;
+          requestLine += c;
         }
+        requestLine.trim();
+        
+        Serial.print("HTTP request line: ");
+        Serial.println(requestLine);
+        
+        // Only support GET for now
+        if (!requestLine.startsWith("GET ")) {
+          Serial.println("Unsupported HTTP method, closing");
+          client.stop();
+          continue;
+        }
+        
+        // Extract the path between the first and second spaces
+        int firstSpace = requestLine.indexOf(' ');
+        int secondSpace = requestLine.indexOf(' ', firstSpace + 1);
+        
+        String path = "/";
+        if (firstSpace > 0 && secondSpace > firstSpace) {
+          path = requestLine.substring(firstSpace + 1, secondSpace);
+        }
+        
+        Serial.print("Raw path: ");
+        Serial.println(path);
+        
+        // Keep full path for save-config (needs query params)
+        String fullPath = path;
+        
+        // Strip any query string so /control?x=1 becomes /control
+        int qPos = path.indexOf('?');
+        if (qPos > 0) {
+          path = path.substring(0, qPos);
+        }
+        
+        Serial.print("Normalized path: ");
+        Serial.println(path);
         
         // Consume headers
         String headerLine = "";
@@ -1065,15 +1132,12 @@ void webServerThreadFunc() {
           }
         }
         
-        Serial.print("Request: ");
-        Serial.println(request);
-        
         // Process commands
-        if (request.length() > 0) {
+        if (path.length() > 0) {
           unsigned long now = millis();
           
           // Route: Main page
-          if (request.indexOf("GET / ") == 0) {
+          if (path == "/") {
             Serial.println("Serving main page");
             sendMainPage(client);
             client.flush();
@@ -1084,7 +1148,7 @@ void webServerThreadFunc() {
           }
           
           // Route: Control page
-          else if (request.indexOf("GET /control ") == 0) {
+          else if (path == "/control") {
             Serial.println("Serving control page");
             sendControlPage(client);
             client.flush();
@@ -1095,7 +1159,7 @@ void webServerThreadFunc() {
           }
           
           // Route: Telemetry page
-          else if (request.indexOf("GET /telemetry ") == 0) {
+          else if (path == "/telemetry") {
             Serial.println("Serving telemetry page");
             sendTelemetryPage(client);
             client.flush();
@@ -1106,7 +1170,7 @@ void webServerThreadFunc() {
           }
           
           // Route: Setup page
-          else if (request.indexOf("GET /setup ") == 0) {
+          else if (path == "/setup") {
             Serial.println("Serving setup page");
             sendSetupPage(client);
             client.flush();
@@ -1117,43 +1181,43 @@ void webServerThreadFunc() {
           }
           
           // Route: Save configuration
-          else if (request.indexOf("GET /save-config?") == 0) {
+          else if (path == "/save-config") {
             Serial.println("Saving configuration from web form...");
             
-            // Parse all parameters
+            // Parse all parameters from fullPath
             char tempBuffer[64];
             
-            if (getQueryParam(request, "deviceId", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "deviceId", tempBuffer, sizeof(tempBuffer))) {
               strncpy(config.deviceId, tempBuffer, sizeof(config.deviceId) - 1);
               config.deviceId[sizeof(config.deviceId) - 1] = 0;
             }
-            if (getQueryParam(request, "model", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "model", tempBuffer, sizeof(tempBuffer))) {
               strncpy(config.model, tempBuffer, sizeof(config.model) - 1);
               config.model[sizeof(config.model) - 1] = 0;
             }
-            if (getQueryParam(request, "location", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "location", tempBuffer, sizeof(tempBuffer))) {
               strncpy(config.location, tempBuffer, sizeof(config.location) - 1);
               config.location[sizeof(config.location) - 1] = 0;
             }
-            if (getQueryParam(request, "ssid", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "ssid", tempBuffer, sizeof(tempBuffer))) {
               strncpy(config.ssid, tempBuffer, sizeof(config.ssid) - 1);
               config.ssid[sizeof(config.ssid) - 1] = 0;
             }
-            if (getQueryParam(request, "password", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "password", tempBuffer, sizeof(tempBuffer))) {
               strncpy(config.password, tempBuffer, sizeof(config.password) - 1);
               config.password[sizeof(config.password) - 1] = 0;
             }
-            if (getQueryParam(request, "mqttServer", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "mqttServer", tempBuffer, sizeof(tempBuffer))) {
               strncpy(config.mqttServer, tempBuffer, sizeof(config.mqttServer) - 1);
               config.mqttServer[sizeof(config.mqttServer) - 1] = 0;
             }
-            if (getQueryParam(request, "mqttPort", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "mqttPort", tempBuffer, sizeof(tempBuffer))) {
               int port = atoi(tempBuffer);
               if (port > 0 && port <= 65535) {
                 config.mqttPort = port;
               }
             }
-            if (getQueryParam(request, "mqttTopic", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "mqttTopic", tempBuffer, sizeof(tempBuffer))) {
               strncpy(config.mqttTopic, tempBuffer, sizeof(config.mqttTopic) - 1);
               config.mqttTopic[sizeof(config.mqttTopic) - 1] = 0;
             }
@@ -1177,37 +1241,15 @@ void webServerThreadFunc() {
           }
           
           // Control commands with debouncing
-          else if (request.indexOf("/led?state=on") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
-            ledEnabled = true;
-            lastLedChange = now;
-            sendControlPage(client);
-            client.flush();
-            Thread::wait(10);
-            client.stop();
-            Serial.println("Client connection closed");
-            continue;
-          }
-          else if (request.indexOf("/led?state=off") > 0 && now - lastLedChange > DEBOUNCE_DELAY) {
-            ledEnabled = false;
-            rgbLED.turnOff();
-            lastLedChange = now;
-            sendControlPage(client);
-            client.flush();
-            Thread::wait(10);
-            client.stop();
-            Serial.println("Client connection closed");
-            continue;
-          }
-          else if (request.indexOf("/display?state=on") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
-            displayEnabled = true;
-            lastDisplayChange = now;
-            Screen.init();
-            Screen.print(0, config.deviceId);
-            Screen.print(1, "Web Control");
-            if (WiFi.status() == WL_CONNECTED) {
-              char ipStr[16];
-              sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
-              Screen.print(3, ipStr);
+          else if (path == "/led" && now - lastLedChange > DEBOUNCE_DELAY) {
+            // Check query parameter for state
+            if (fullPath.indexOf("state=on") > 0) {
+              ledEnabled = true;
+              lastLedChange = now;
+            } else if (fullPath.indexOf("state=off") > 0) {
+              ledEnabled = false;
+              rgbLED.turnOff();
+              lastLedChange = now;
             }
             sendControlPage(client);
             client.flush();
@@ -1216,10 +1258,24 @@ void webServerThreadFunc() {
             Serial.println("Client connection closed");
             continue;
           }
-          else if (request.indexOf("/display?state=off") > 0 && now - lastDisplayChange > DEBOUNCE_DELAY) {
-            displayEnabled = false;
-            lastDisplayChange = now;
-            Screen.clean();
+          else if (path == "/display" && now - lastDisplayChange > DEBOUNCE_DELAY) {
+            // Check query parameter for state
+            if (fullPath.indexOf("state=on") > 0) {
+              displayEnabled = true;
+              lastDisplayChange = now;
+              Screen.init();
+              Screen.print(0, config.deviceId);
+              Screen.print(1, "Web Control");
+              if (WiFi.status() == WL_CONNECTED) {
+                char ipStr[16];
+                sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
+                Screen.print(3, ipStr);
+              }
+            } else if (fullPath.indexOf("state=off") > 0) {
+              displayEnabled = false;
+              lastDisplayChange = now;
+              Screen.clean();
+            }
             sendControlPage(client);
             client.flush();
             Thread::wait(10);
@@ -1227,7 +1283,7 @@ void webServerThreadFunc() {
             Serial.println("Client connection closed");
             continue;
           }
-          else if (request.indexOf("/reset") > 0) {
+          else if (path == "/reset") {
             Serial.println("RESET requested via web interface");
             sendControlPage(client);
             client.flush();
@@ -1236,9 +1292,23 @@ void webServerThreadFunc() {
             Thread::wait(100);
             NVIC_SystemReset();
           }
+          
+          // Unknown path - serve main page
+          else {
+            Serial.print("Unknown path: ");
+            Serial.println(path);
+            Serial.println("Serving main page");
+            sendMainPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
         }
         
-        Serial.println("Responding with main page...");
+        // If we get here with no path, serve main page
+        Serial.println("No path specified, serving main page");
         sendMainPage(client);
         client.flush();
         Thread::wait(10);
