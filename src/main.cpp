@@ -283,6 +283,11 @@ bool webServerStarted = false;
 const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
 const unsigned long WIFI_RETRY_INTERVAL = 30000; // Retry WiFi every 30 seconds
 
+// Network watchdog - reboot if no network activity for 15 minutes
+unsigned long lastSuccessfulNetworkActivity = 0;
+const unsigned long NETWORK_WATCHDOG_TIMEOUT = 15 * 60 * 1000; // 15 minutes in milliseconds
+bool watchdogEnabled = true;
+
 // Global sensor values for web display
 float lastTemperature = 0.0;
 float lastHumidity = 0.0;
@@ -305,6 +310,84 @@ void disableStatusLedsOnce()
   digitalWrite(LED_WIFI,  LOW);
   digitalWrite(LED_AZURE, LOW);
   digitalWrite(LED_USER,  LOW);
+}
+
+// System reboot function using STM32 HAL
+void systemReboot() {
+  Serial.println("\n========================================");
+  Serial.println("NETWORK WATCHDOG: Initiating system reboot...");
+  Serial.println("========================================\n");
+  Serial.flush(); // Ensure message is sent before reboot
+  
+  // Visual indication before reboot
+  rgbLED.setColor(255, 0, 0); // Red
+  delay(1000);
+  rgbLED.turnOff();
+  
+  // Perform system reset using STM32 HAL
+  NVIC_SystemReset();
+}
+
+// Network watchdog check - monitors network activity and reboots if needed
+void checkNetworkWatchdog() {
+  if (!watchdogEnabled) {
+    return;
+  }
+  
+  unsigned long now = millis();
+  
+  // Handle millis() rollover (occurs every ~49 days)
+  if (now < lastSuccessfulNetworkActivity) {
+    lastSuccessfulNetworkActivity = now;
+    return;
+  }
+  
+  // Check if we have WiFi connection
+  bool hasNetworkActivity = false;
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    // We have WiFi, this counts as network activity
+    hasNetworkActivity = true;
+  }
+  
+  // Update last successful activity timestamp if we have connectivity
+  if (hasNetworkActivity) {
+    lastSuccessfulNetworkActivity = now;
+  } else {
+    // No network activity - check if timeout exceeded
+    unsigned long timeSinceLastActivity = now - lastSuccessfulNetworkActivity;
+    
+    if (timeSinceLastActivity > NETWORK_WATCHDOG_TIMEOUT) {
+      // Timeout exceeded - log and reboot
+      Serial.println("\n!!! NETWORK WATCHDOG TIMEOUT !!!");
+      Serial.print("No network activity for ");
+      Serial.print(timeSinceLastActivity / 1000);
+      Serial.println(" seconds");
+      Serial.print("Threshold: ");
+      Serial.print(NETWORK_WATCHDOG_TIMEOUT / 1000);
+      Serial.println(" seconds");
+      
+      if (displayEnabled) {
+        Screen.clean();
+        Screen.print(0, "WATCHDOG TIMEOUT");
+        Screen.print(1, "Rebooting...");
+      }
+      
+      delay(2000); // Give time to display message
+      systemReboot();
+    } else {
+      // Log warning every minute when disconnected
+      static unsigned long lastWarning = 0;
+      if (now - lastWarning > 60000) {
+        lastWarning = now;
+        Serial.print("WARNING: No network activity for ");
+        Serial.print(timeSinceLastActivity / 1000);
+        Serial.print(" seconds (timeout in ");
+        Serial.print((NETWORK_WATCHDOG_TIMEOUT - timeSinceLastActivity) / 1000);
+        Serial.println(" seconds)");
+      }
+    }
+  }
 }
 
 // Configuration management functions
@@ -769,6 +852,13 @@ void sendControlPage(WiFiClient &client) {
   
   char body[3200];
   
+  // Calculate time since last network activity for watchdog display
+  unsigned long timeSinceActivity = (millis() - lastSuccessfulNetworkActivity) / 1000; // seconds
+  unsigned long timeoutRemaining = 0;
+  if (watchdogEnabled && timeSinceActivity < (NETWORK_WATCHDOG_TIMEOUT / 1000)) {
+    timeoutRemaining = (NETWORK_WATCHDOG_TIMEOUT / 1000) - timeSinceActivity;
+  }
+  
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Control - %s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
@@ -785,7 +875,8 @@ void sendControlPage(WiFiClient &client) {
     "@media(min-width:400px){body{padding:15px}.c{padding:20px}button,a{font-size:15px}}"
     "</style></head><body>"
     "<div class='c'><h2>%s</h2>"
-    "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div></div>"
+    "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div>"
+    "<div class='s'><span>Watchdog:</span><span class='b %s'>%s</span>%s</div></div>"
     "<div class='c'>"
     "<div class='row'><form action='/led' method='GET'><input type='hidden' name='state' value='on'><button class='g'>LED ON</button></form>"
     "<form action='/led' method='GET'><input type='hidden' name='state' value='off'><button class='r'>LED OFF</button></form></div>"
@@ -797,6 +888,8 @@ void sendControlPage(WiFiClient &client) {
     "<form action='/azureled' method='GET'><input type='hidden' name='state' value='off'><button class='r'>Azure LED OFF</button></form></div>"
     "<div class='row'><form action='/userled' method='GET'><input type='hidden' name='state' value='on'><button class='g'>User LED ON</button></form>"
     "<form action='/userled' method='GET'><input type='hidden' name='state' value='off'><button class='r'>User LED OFF</button></form></div>"
+    "<div class='row'><form action='/watchdog' method='GET'><input type='hidden' name='state' value='enable'><button class='g'>Watchdog ON</button></form>"
+    "<form action='/watchdog' method='GET'><input type='hidden' name='state' value='disable'><button class='r'>Watchdog OFF</button></form></div>"
     "<form action='/reset' method='GET' style='margin:16px 0 8px'><button class='u'>RESET</button></form>"
     "<a href='/' class='gray'>BACK</a>"
     "</div></body></html>",
@@ -804,7 +897,10 @@ void sendControlPage(WiFiClient &client) {
     config.deviceId,
     mqttConnected ? "on" : "off",
     mqttConnected ? "CONNECTED" : "DISCONNECTED",
-    config.mqttServer);
+    config.mqttServer,
+    watchdogEnabled ? "on" : "off",
+    watchdogEnabled ? "ENABLED" : "DISABLED",
+    watchdogEnabled ? (timeoutRemaining > 0 ? "<span style='color:#999'> | </span><span style='color:#999'>OK</span>" : "") : "");
   
   if (bodyLen < 0) {
     bodyLen = 0;
@@ -1390,6 +1486,22 @@ void webServerThreadFunc() {
             Thread::wait(100);
             NVIC_SystemReset();
           }
+          else if (path == "/watchdog") {
+            if (fullPath.indexOf("state=enable") > 0) {
+              watchdogEnabled = true;
+              lastSuccessfulNetworkActivity = millis(); // Reset timer when enabling
+              Serial.println("Watchdog ENABLED via web interface");
+            } else if (fullPath.indexOf("state=disable") > 0) {
+              watchdogEnabled = false;
+              Serial.println("Watchdog DISABLED via web interface");
+            }
+            sendControlPage(client);
+            client.flush();
+            Thread::wait(10);
+            client.stop();
+            Serial.println("Client connection closed");
+            continue;
+          }
           
           // Unknown path - serve main page
           else {
@@ -1539,6 +1651,10 @@ void setup() {
     webServerStarted = false;
   }
   
+  // Initialize network watchdog timer
+  lastSuccessfulNetworkActivity = millis();
+  Serial.println("Network watchdog initialized (15 minute timeout)");
+  
   // After everything is initialized, turn off the status LEDs
   disableStatusLedsOnce();
 }
@@ -1555,6 +1671,9 @@ void loop() {
   if (!wifiLedEnabled) digitalWrite(LED_WIFI,  LOW);
   if (!azureLedEnabled) digitalWrite(LED_AZURE, LOW);
   if (!userLedEnabled) digitalWrite(LED_USER,  LOW);
+  
+  // Check network watchdog (monitors connectivity and reboots if needed)
+  checkNetworkWatchdog();
   
   // Manage WiFi connection with retry logic
   manageWiFi();
@@ -1722,6 +1841,8 @@ void loop() {
       
       if (publishMQTT(config.mqttTopic, jsonPayload)) {
         Serial.println("MQTT published successfully");
+        // Update watchdog - successful network activity
+        lastSuccessfulNetworkActivity = millis();
       } else {
         Serial.println("MQTT publish failed, will retry");
         if (displayEnabled) {

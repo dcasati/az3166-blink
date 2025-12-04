@@ -1,0 +1,56 @@
+# Home Assistant Dashboard Card for Az3166
+# Add this to your Lovelace dashboard (UI configuration)
+
+# Simple toggle switches for all devices
+type: entities
+title: Az3166 RGB LED Controls
+entities:
+  - entity: switch.az3166_device_1_rgb_led
+    name: Device 1 RGB LED
+    icon: mdi:lightbulb
+  - entity: switch.az3166_device_2_rgb_led
+    name: Device 2 RGB LED
+    icon: mdi:lightbulb
+  - entity: switch.az3166_device_3_rgb_led
+    name: Device 3 RGB LED
+    icon: mdi:lightbulb
+
+---
+
+# Grid layout with individual switches
+type: grid
+columns: 3
+cards:
+  - type: button
+    entity: switch.az3166_device_1_rgb_led
+    name: Device 1
+    icon: mdi:lightbulb
+    tap_action:
+      action: toggle
+    
+  - type: button
+    entity: switch.az3166_device_2_rgb_led
+    name: Device 2
+    icon: mdi:lightbulb
+    tap_action:
+      action: toggle
+    
+  - type: button
+    entity: switch.az3166_device_3_rgb_led
+    name: Device 3
+    icon: mdi:lightbulb
+    tap_action:
+      action: toggle
+
+---
+
+# Compact glance view
+type: glance
+title: Az3166 Devices
+entities:
+  - entity: switch.az3166_device_1_rgb_led
+    name: Device 1
+  - entity: switch.az3166_device_2_rgb_led
+    name: Device 2
+  - entity: switch.az3166_device_3_rgb_led
+    name: Device 3

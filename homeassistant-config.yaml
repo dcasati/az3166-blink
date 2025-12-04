@@ -1,0 +1,191 @@
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+  extra_module_url:
+    - /hacsfiles/kiosk-mode/kiosk-mode.js
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# Az3166 Device Controls - Command line switches
+command_line:
+  # Alice (172.16.5.140)
+  - switch:
+      name: Alice LED
+      command_on: 'curl -s http://172.16.5.140/led?state=on'
+      command_off: 'curl -s http://172.16.5.140/led?state=off'
+  - switch:
+      name: Alice Display
+      command_on: 'curl -s http://172.16.5.140/display?state=on'
+      command_off: 'curl -s http://172.16.5.140/display?state=off'
+  - switch:
+      name: Alice WiFi LED
+      command_on: 'curl -s http://172.16.5.140/wifiled?state=on'
+      command_off: 'curl -s http://172.16.5.140/wifiled?state=off'
+  - switch:
+      name: Alice Azure LED
+      command_on: 'curl -s http://172.16.5.140/azureled?state=on'
+      command_off: 'curl -s http://172.16.5.140/azureled?state=off'
+  - switch:
+      name: Alice User LED
+      command_on: 'curl -s http://172.16.5.140/userled?state=on'
+      command_off: 'curl -s http://172.16.5.140/userled?state=off'
+    
+  # Mechanical Room (172.16.5.183)
+  - switch:
+      name: Mechanical Room LED
+      command_on: 'curl -s http://172.16.5.183/led?state=on'
+      command_off: 'curl -s http://172.16.5.183/led?state=off'
+  - switch:
+      name: Mechanical Room Display
+      command_on: 'curl -s http://172.16.5.183/display?state=on'
+      command_off: 'curl -s http://172.16.5.183/display?state=off'
+  - switch:
+      name: Mechanical Room WiFi LED
+      command_on: 'curl -s http://172.16.5.183/wifiled?state=on'
+      command_off: 'curl -s http://172.16.5.183/wifiled?state=off'
+  - switch:
+      name: Mechanical Room Azure LED
+      command_on: 'curl -s http://172.16.5.183/azureled?state=on'
+      command_off: 'curl -s http://172.16.5.183/azureled?state=off'
+  - switch:
+      name: Mechanical Room User LED
+      command_on: 'curl -s http://172.16.5.183/userled?state=on'
+      command_off: 'curl -s http://172.16.5.183/userled?state=off'
+    
+  # Basement (172.16.5.164)
+  - switch:
+      name: Basement LED
+      command_on: 'curl -s http://172.16.5.164/led?state=on'
+      command_off: 'curl -s http://172.16.5.164/led?state=off'
+  - switch:
+      name: Basement Display
+      command_on: 'curl -s http://172.16.5.164/display?state=on'
+      command_off: 'curl -s http://172.16.5.164/display?state=off'
+  - switch:
+      name: Basement WiFi LED
+      command_on: 'curl -s http://172.16.5.164/wifiled?state=on'
+      command_off: 'curl -s http://172.16.5.164/wifiled?state=off'
+  - switch:
+      name: Basement Azure LED
+      command_on: 'curl -s http://172.16.5.164/azureled?state=on'
+      command_off: 'curl -s http://172.16.5.164/azureled?state=off'
+  - switch:
+      name: Basement User LED
+      command_on: 'curl -s http://172.16.5.164/userled?state=on'
+      command_off: 'curl -s http://172.16.5.164/userled?state=off'
+
+  # Garage (172.16.5.111)
+  - switch:
+      name: Garage LED
+      command_on: 'curl -s http://172.16.5.111/led?state=on'
+      command_off: 'curl -s http://172.16.5.111/led?state=off'
+  - switch:
+      name: Garage Display
+      command_on: 'curl -s http://172.16.5.111/display?state=on'
+      command_off: 'curl -s http://172.16.5.111/display?state=off'
+  - switch:
+      name: Garage WiFi LED
+      command_on: 'curl -s http://172.16.5.111/wifiled?state=on'
+      command_off: 'curl -s http://172.16.5.111/wifiled?state=off'
+  - switch:
+      name: Garage Azure LED
+      command_on: 'curl -s http://172.16.5.111/azureled?state=on'
+      command_off: 'curl -s http://172.16.5.111/azureled?state=off'
+  - switch:
+      name: Garage User LED
+      command_on: 'curl -s http://172.16.5.111/userled?state=on'
+      command_off: 'curl -s http://172.16.5.111/userled?state=off'
+
+  # Mastersuite (172.16.5.142)
+  - switch:
+      name: Mastersuite LED
+      command_on: 'curl -s http://172.16.5.142/led?state=on'
+      command_off: 'curl -s http://172.16.5.142/led?state=off'
+  - switch:
+      name: Mastersuite Display
+      command_on: 'curl -s http://172.16.5.142/display?state=on'
+      command_off: 'curl -s http://172.16.5.142/display?state=off'
+  - switch:
+      name: Mastersuite WiFi LED
+      command_on: 'curl -s http://172.16.5.142/wifiled?state=on'
+      command_off: 'curl -s http://172.16.5.142/wifiled?state=off'
+  - switch:
+      name: Mastersuite Azure LED
+      command_on: 'curl -s http://172.16.5.142/azureled?state=on'
+      command_off: 'curl -s http://172.16.5.142/azureled?state=off'
+  - switch:
+      name: Mastersuite User LED
+      command_on: 'curl -s http://172.16.5.142/userled?state=on'
+      command_off: 'curl -s http://172.16.5.142/userled?state=off'
+
+  # Ben (172.16.5.107)
+  - switch:
+      name: Ben LED
+      command_on: 'curl -s http://172.16.5.107/led?state=on'
+      command_off: 'curl -s http://172.16.5.107/led?state=off'
+  - switch:
+      name: Ben Display
+      command_on: 'curl -s http://172.16.5.107/display?state=on'
+      command_off: 'curl -s http://172.16.5.107/display?state=off'
+  - switch:
+      name: Ben WiFi LED
+      command_on: 'curl -s http://172.16.5.107/wifiled?state=on'
+      command_off: 'curl -s http://172.16.5.107/wifiled?state=off'
+  - switch:
+      name: Ben Azure LED
+      command_on: 'curl -s http://172.16.5.107/azureled?state=on'
+      command_off: 'curl -s http://172.16.5.107/azureled?state=off'
+  - switch:
+      name: Ben User LED
+      command_on: 'curl -s http://172.16.5.107/userled?state=on'
+      command_off: 'curl -s http://172.16.5.107/userled?state=off'
+
+template:
+  - trigger:
+      - platform: mqtt
+        topic: sensors
+    sensor:
+      - name: "AcuRite 2316 Temperature"
+        unique_id: acurite_2316_temperature
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state: >
+          {% set p = trigger.payload_json %}
+          {% if p.id == 2316 and p.temperature_F is number %}
+            {{ ((p.temperature_F - 32) * 5/9) | round(1) }}
+          {% else %} {{ states(this.entity_id) }} {% endif %}
+      - name: "AcuRite 2316 Humidity"
+        unique_id: acurite_2316_humidity
+        device_class: humidity
+        unit_of_measurement: "%"
+        state: >
+          {% set p = trigger.payload_json %}
+          {% if p.id == 2316 and p.humidity is number %}
+            {{ p.humidity }}
+          {% else %} {{ states(this.entity_id) }} {% endif %}
+      - name: "AcuRite 2316 Wind Avg"
+        unique_id: acurite_2316_wind_avg
+        unit_of_measurement: "km/h"
+        icon: mdi:weather-windy
+        state: >
+          {% set p = trigger.payload_json %}
+          {% if p.id == 2316 and p.wind_avg_km_h is number %}
+            {{ p.wind_avg_km_h | round(1) }}
+          {% else %} {{ states(this.entity_id) }} {% endif %}
+
+  - trigger:
+      - platform: mqtt
+        topic: sensors
+    binary_sensor:
+      - name: "AcuRite 2316 Battery"
+        unique_id: acurite_2316_battery
+        device_class: battery
+        state: >
+          {% set p = trigger.payload_json %}
+          {{ (p.id == 2316) and (p.battery_ok == 1) }}
+
