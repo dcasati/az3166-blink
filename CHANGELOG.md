@@ -5,6 +5,33 @@ All notable changes to the AZ3166 Sensor Station project will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-01-04
+
+### Added
+- **Network Watchdog** - Automatic device reboot if network connectivity is lost for 1 minute
+  - Monitors WiFi connection status continuously
+  - Configurable timeout (default: 60 seconds)
+  - Can be enabled/disabled via web interface
+  - Visual feedback on OLED display before reboot
+  - Serial console warnings when network is down
+- Web interface controls for watchdog (ON/OFF buttons)
+- Watchdog status indicator in control panel
+- `/watchdog` HTTP endpoint for remote control
+
+### Changed
+- Increased HTML buffer size for control page (3200 → 4096 bytes)
+- Improved web interface layout with watchdog status display
+
+### Fixed
+- Added millis() rollover protection for long-term uptime (49+ days)
+- Watchdog timer resets when manually enabled via web interface
+
+### Technical Details
+- RAM: 17.5% (45,804 / 262,144 bytes)
+- Flash: 24.2% (254,244 / 1,048,576 bytes)
+- New constants: `NETWORK_WATCHDOG_TIMEOUT = 60000ms`
+- New functions: `checkNetworkWatchdog()`, `systemReboot()`
+
 ## [1.0.0] - 2025-09-10
 
 ### Added

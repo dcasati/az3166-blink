@@ -11,7 +11,7 @@
 #include "Thread.h"
 
 // Firmware version
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.0.1"
 
 // Web server
 WiFiServer webServer(80);
@@ -283,9 +283,9 @@ bool webServerStarted = false;
 const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
 const unsigned long WIFI_RETRY_INTERVAL = 30000; // Retry WiFi every 30 seconds
 
-// Network watchdog - reboot if no network activity for 15 minutes
+// Network watchdog - reboot if no network activity for 1 minute
 unsigned long lastSuccessfulNetworkActivity = 0;
-const unsigned long NETWORK_WATCHDOG_TIMEOUT = 15 * 60 * 1000; // 15 minutes in milliseconds
+const unsigned long NETWORK_WATCHDOG_TIMEOUT = 1 * 60 * 1000; // 1 minute in milliseconds
 bool watchdogEnabled = true;
 
 // Global sensor values for web display
@@ -850,7 +850,7 @@ void sendMainPage(WiFiClient &client) {
 void sendControlPage(WiFiClient &client) {
   Serial.println("Sending control page");
   
-  char body[3200];
+  char body[4096];
   
   // Calculate time since last network activity for watchdog display
   unsigned long timeSinceActivity = (millis() - lastSuccessfulNetworkActivity) / 1000; // seconds
@@ -1653,7 +1653,7 @@ void setup() {
   
   // Initialize network watchdog timer
   lastSuccessfulNetworkActivity = millis();
-  Serial.println("Network watchdog initialized (15 minute timeout)");
+  Serial.println("Network watchdog initialized (1 minute timeout)");
   
   // After everything is initialized, turn off the status LEDs
   disableStatusLedsOnce();
