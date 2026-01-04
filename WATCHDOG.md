@@ -7,7 +7,7 @@ The Az3166 firmware now includes a network watchdog that monitors network connec
 
 ### Automatic Reboot
 - **Timeout**: 15 minutes (900 seconds)
-- **Trigger**: No WiFi connectivity for 15 minutes
+- **Trigger**: No WiFi connectivity for 5 minutes
 - **Action**: System reboot using STM32 NVIC_SystemReset()
 
 ### Monitoring
@@ -33,7 +33,7 @@ While disconnected from network:
 ### Variables
 ```cpp
 unsigned long lastSuccessfulNetworkActivity = 0;
-const unsigned long NETWORK_WATCHDOG_TIMEOUT = 15 * 60 * 1000; // 15 minutes
+const unsigned long NETWORK_WATCHDOG_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 bool watchdogEnabled = true;
 ```
 
@@ -63,7 +63,7 @@ The web control panel (`http://<device-ip>/control`) now includes:
 
 ### Initialization
 ```
-Network watchdog initialized (15 minute timeout)
+Network watchdog initialized (5 minute timeout)
 ```
 
 ### Periodic Warnings (when disconnected)
@@ -128,7 +128,7 @@ Total firmware after watchdog:
 2. Verify watchdog is enabled (web interface or serial console)
 3. Disconnect network (unplug router or block device MAC address)
 4. Monitor serial console for warnings
-5. After 15 minutes, device will automatically reboot
+5. After 5 minutes, device will automatically reboot
 6. Device will attempt to reconnect after reboot
 
 ### To Disable for Testing
