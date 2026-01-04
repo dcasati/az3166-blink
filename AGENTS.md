@@ -5,7 +5,7 @@
 To compile and upload the code to the Az3166 board, use the following command:
 
 ```bash
-cd /home/dcasati/src/az3166-blink && source .venv/bin/activate && pio run --target upload
+cd ${HOME}/src/az3166-blink && source .venv/bin/activate && pio run --target upload
 ```
 
 ### Prerequisites
