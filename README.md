@@ -77,18 +77,40 @@ The device publishes JSON sensor data to the configured MQTT topic:
 
 ## Building and Uploading
 
+### Prerequisites
+- PlatformIO installed in a Python virtual environment
+- Az3166 board connected via USB (ST-Link detected with `lsusb`)
+- Board should appear as: `Bus 001 Device 003: ID 0483:374b STMicroelectronics ST-LINK/V2.1`
+
 ### Method 1: PlatformIO (Recommended)
 
+**Quick Upload (One Command):**
 ```bash
+cd ${HOME}/src/az3166-blink && source .venv/bin/activate && pio run --target upload
+```
+
+**Step-by-Step:**
+```bash
+# Activate virtual environment
+cd /path/to/az3166-blink
+source .venv/bin/activate
+
 # Build the project
-platformio run
+pio run
 
 # Upload to device
-platformio run --target upload
+pio run --target upload
 
 # Monitor serial output
 platformio device monitor
 ```
+
+**Build Information:**
+- Platform: ST STM32 (ststm32)
+- Board: mxchip_az3166
+- Framework: Arduino
+- Upload Protocol: stlink
+- Monitor Speed: 115200 baud
 
 ### Method 2: Alternative Flashing Methods
 

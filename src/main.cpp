@@ -11,7 +11,7 @@
 #include "Thread.h"
 
 // Firmware version
-#define FIRMWARE_VERSION "1.0.1"
+#define FIRMWARE_VERSION "1.0.2"
 
 // Web server
 WiFiServer webServer(80);
@@ -283,9 +283,9 @@ bool webServerStarted = false;
 const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
 const unsigned long WIFI_RETRY_INTERVAL = 30000; // Retry WiFi every 30 seconds
 
-// Network watchdog - reboot if no network activity for 1 minute
+// Network watchdog - reboot if no network activity for 5 minutes
 unsigned long lastSuccessfulNetworkActivity = 0;
-const unsigned long NETWORK_WATCHDOG_TIMEOUT = 1 * 60 * 1000; // 1 minute in milliseconds
+const unsigned long NETWORK_WATCHDOG_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
 bool watchdogEnabled = true;
 
 // Global sensor values for web display
@@ -342,18 +342,10 @@ void checkNetworkWatchdog() {
     return;
   }
   
-  // Check if we have WiFi connection
-  bool hasNetworkActivity = false;
+  // Check if we have WiFi connection (but don't reset watchdog - only MQTT publish does that)
+  bool hasWiFi = (WiFi.status() == WL_CONNECTED);
   
-  if (WiFi.status() == WL_CONNECTED) {
-    // We have WiFi, this counts as network activity
-    hasNetworkActivity = true;
-  }
-  
-  // Update last successful activity timestamp if we have connectivity
-  if (hasNetworkActivity) {
-    lastSuccessfulNetworkActivity = now;
-  } else {
+  if (!hasWiFi) {
     // No network activity - check if timeout exceeded
     unsigned long timeSinceLastActivity = now - lastSuccessfulNetworkActivity;
     
@@ -1824,31 +1816,43 @@ void loop() {
     if (mqttConnected && now - lastMqttPublish > 30000) {
       lastMqttPublish = now;
       
-      // Create JSON payload with latest sensor values
-      char jsonPayload[512];
-      sprintf(jsonPayload, 
-        "{\"device\":\"%s\",\"model\":\"%s\",\"location\":\"%s\",\"temperature\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
-        "\"accel\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},"
-        "\"gyro\":{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f},"
-        "\"mag\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f}}",
-        config.deviceId, config.model, config.location, lastTemperature, lastHumidity, lastPressure,
-        lastAccelX, lastAccelY, lastAccelZ,
-        lastGyroX, lastGyroY, lastGyroZ,
-        lastMagX, lastMagY, lastMagZ);
-      
-      Serial.print("MQTT JSON: ");
-      Serial.println(jsonPayload);
-      
-      if (publishMQTT(config.mqttTopic, jsonPayload)) {
-        Serial.println("MQTT published successfully");
-        // Update watchdog - successful network activity
-        lastSuccessfulNetworkActivity = millis();
-      } else {
-        Serial.println("MQTT publish failed, will retry");
+      // First verify MQTT connection is still alive
+      if (!mqttWifiClient.connected()) {
+        Serial.println("MQTT connection lost! Forcing reconnection...");
+        mqttConnected = false;
+        mqttWifiClient.stop();
         if (displayEnabled) {
-          Screen.print(3, "MQTT failed!");
+          Screen.print(3, "MQTT disconnected!");
         }
-        // Don't disconnect - just retry next time
+      } else {
+        // Create JSON payload with latest sensor values
+        char jsonPayload[512];
+        sprintf(jsonPayload, 
+          "{\"device\":\"%s\",\"model\":\"%s\",\"location\":\"%s\",\"temperature\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
+          "\"accel\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},"
+          "\"gyro\":{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f},"
+          "\"mag\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f}}",
+          config.deviceId, config.model, config.location, lastTemperature, lastHumidity, lastPressure,
+          lastAccelX, lastAccelY, lastAccelZ,
+          lastGyroX, lastGyroY, lastGyroZ,
+          lastMagX, lastMagY, lastMagZ);
+        
+        Serial.print("MQTT JSON: ");
+        Serial.println(jsonPayload);
+        
+        if (publishMQTT(config.mqttTopic, jsonPayload)) {
+          Serial.println("MQTT published successfully");
+          // Update watchdog - successful network activity
+          lastSuccessfulNetworkActivity = millis();
+        } else {
+          Serial.println("MQTT publish failed! Forcing reconnection...");
+          if (displayEnabled) {
+            Screen.print(3, "MQTT failed!");
+          }
+          // Close connection and force reconnect
+          mqttConnected = false;
+          mqttWifiClient.stop();
+        }
       }
     }
     
