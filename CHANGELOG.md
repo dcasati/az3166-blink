@@ -5,6 +5,27 @@ All notable changes to the AZ3166 Sensor Station project will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-01-24
+
+### Added
+- Firmware version constant (`FIRMWARE_VERSION = "1.0.2"`) for better release tracking
+- Comprehensive build flags to disable unused Azure services:
+  - `DDISABLE_AZURE_HTTP`, `DDISABLE_HTTP_CLIENT`
+  - `DNO_HTTP_TELEMETRY`, `DDISABLE_SYSTEM_TELEMETRY`
+  - `DDISABLE_ALL_AZURE_SERVICES`
+  - `DNO_BACKGROUND_TASKS`, `DDISABLE_AZURE_THREAD`
+
+### Changed
+- Optimized build configuration for reduced memory footprint
+- Improved build consistency across both `az3166_app` and `mxchip_az3166` environments
+- Enhanced Azure service isolation for cleaner execution
+
+### Technical Details
+- RAM: 17.5% (45,804 / 262,144 bytes)
+- Flash: 24.3% (254,396 / 1,048,576 bytes)
+- Build time: ~11 seconds per environment
+- Upload protocol: ST-Link via OpenOCD
+
 ## [1.0.1] - 2026-01-04
 
 ### Added
