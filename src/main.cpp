@@ -2,6 +2,10 @@
 #include <Arduino.h>
 #include "AZ3166WiFi.h"
 #include "AZ3166WiFiUdp.h"
+#include "SystemWiFi.h"
+#include "lwip/err.h"
+#include "lwip/ip_addr.h"
+#include "lwip/dns.h"
 #include "OledDisplay.h"
 #include "RGB_LED.h"
 #include "Sensor.h"
@@ -9,9 +13,10 @@
 #include "stm32f4xx_hal_flash.h"
 #include "rtos.h"
 #include "Thread.h"
+#include "MqttDelivery.h"
 
 // Firmware version
-#define FIRMWARE_VERSION "1.0.1"
+#define FIRMWARE_VERSION "1.0.3"
 
 // Web server
 WiFiServer webServer(80);
@@ -248,10 +253,9 @@ bool loadConfigFromFlash() {
 }
 
 // Legacy variables for compatibility
-// DNS and MQTT globals
+// MQTT globals
 WiFiClient mqttWifiClient;
-IPAddress cachedMqttIP;
-bool mqttIPResolved = false;
+uint16_t mqttPacketId = 0;
 
 // Sensor variables  
 DevI2C *i2c;
@@ -283,9 +287,9 @@ bool webServerStarted = false;
 const unsigned long WIFI_CHECK_INTERVAL = 5000;  // Check WiFi every 5 seconds
 const unsigned long WIFI_RETRY_INTERVAL = 30000; // Retry WiFi every 30 seconds
 
-// Network watchdog - reboot if no network activity for 1 minute
-unsigned long lastSuccessfulNetworkActivity = 0;
-const unsigned long NETWORK_WATCHDOG_TIMEOUT = 1 * 60 * 1000; // 1 minute in milliseconds
+// Only broker-acknowledged telemetry proves end-to-end connectivity.
+MqttDelivery::Watchdog mqttWatchdog;
+const unsigned long NETWORK_WATCHDOG_TIMEOUT = MqttDelivery::WATCHDOG_TIMEOUT_MS;
 bool watchdogEnabled = true;
 
 // Global sensor values for web display
@@ -336,56 +340,36 @@ void checkNetworkWatchdog() {
   
   unsigned long now = millis();
   
-  // Handle millis() rollover (occurs every ~49 days)
-  if (now < lastSuccessfulNetworkActivity) {
-    lastSuccessfulNetworkActivity = now;
-    return;
-  }
-  
-  // Check if we have WiFi connection
-  bool hasNetworkActivity = false;
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    // We have WiFi, this counts as network activity
-    hasNetworkActivity = true;
-  }
-  
-  // Update last successful activity timestamp if we have connectivity
-  if (hasNetworkActivity) {
-    lastSuccessfulNetworkActivity = now;
+  unsigned long timeSinceLastActivity = uint32_t(now - mqttWatchdog.lastAcknowledged);
+
+  if (mqttWatchdog.expired(now)) {
+    Serial.println("\n!!! NETWORK WATCHDOG TIMEOUT !!!");
+    Serial.print("No MQTT delivery acknowledged for ");
+    Serial.print(timeSinceLastActivity / 1000);
+    Serial.println(" seconds");
+    Serial.print("Consecutive missed MQTT deliveries: ");
+    Serial.println(mqttWatchdog.missedDeliveries);
+    Serial.print("Threshold: ");
+    Serial.print(NETWORK_WATCHDOG_TIMEOUT / 1000);
+    Serial.println(" seconds");
+
+    if (displayEnabled) {
+      Screen.clean();
+      Screen.print(0, "WATCHDOG TIMEOUT");
+      Screen.print(1, "Rebooting...");
+    }
+
+    delay(2000);
+    systemReboot();
   } else {
-    // No network activity - check if timeout exceeded
-    unsigned long timeSinceLastActivity = now - lastSuccessfulNetworkActivity;
-    
-    if (timeSinceLastActivity > NETWORK_WATCHDOG_TIMEOUT) {
-      // Timeout exceeded - log and reboot
-      Serial.println("\n!!! NETWORK WATCHDOG TIMEOUT !!!");
-      Serial.print("No network activity for ");
+    static unsigned long lastWarning = 0;
+    if (timeSinceLastActivity >= 60000 && now - lastWarning >= 60000) {
+      lastWarning = now;
+      Serial.print("WARNING: No MQTT delivery acknowledged for ");
       Serial.print(timeSinceLastActivity / 1000);
-      Serial.println(" seconds");
-      Serial.print("Threshold: ");
-      Serial.print(NETWORK_WATCHDOG_TIMEOUT / 1000);
-      Serial.println(" seconds");
-      
-      if (displayEnabled) {
-        Screen.clean();
-        Screen.print(0, "WATCHDOG TIMEOUT");
-        Screen.print(1, "Rebooting...");
-      }
-      
-      delay(2000); // Give time to display message
-      systemReboot();
-    } else {
-      // Log warning every minute when disconnected
-      static unsigned long lastWarning = 0;
-      if (now - lastWarning > 60000) {
-        lastWarning = now;
-        Serial.print("WARNING: No network activity for ");
-        Serial.print(timeSinceLastActivity / 1000);
-        Serial.print(" seconds (timeout in ");
-        Serial.print((NETWORK_WATCHDOG_TIMEOUT - timeSinceLastActivity) / 1000);
-        Serial.println(" seconds)");
-      }
+      Serial.print(" seconds (timeout in ");
+      Serial.print((NETWORK_WATCHDOG_TIMEOUT - timeSinceLastActivity) / 1000);
+      Serial.println(" seconds)");
     }
   }
 }
@@ -528,248 +512,118 @@ bool checkForConfigurationMode() {
   return false;
 }
 
-// Simplified DNS Resolution - use direct IP for now, add full DNS later
-bool resolveHostname(const char* hostname, IPAddress& ip) {
-  Serial.print("Resolving hostname: ");
-  Serial.println(hostname);
-  
-  // For now, use the direct IP we know works
-  // TODO: Implement full UDP DNS when we have time
-  if (strcmp(hostname, "mqtt.dcasati.net") == 0) {
-    ip = IPAddress(172, 16, 5, 241);
-    Serial.print("Using cached IP: ");
-    Serial.println(ip);
-    return true;
+void configureNetworkDNS() {
+  IPAddress gateway = WiFi.gatewayIP();
+  ip_addr_t primary;
+  primary.addr = ipaddr_addr(gateway.get_address());
+  if (primary.addr == 0 || primary.addr == IPADDR_NONE) {
+    Serial.println("DNS: no valid gateway; retaining network-provided resolvers");
+    return;
   }
-  
-  Serial.println("Hostname not in cache");
+
+  ip_addr_t previous = dns_getserver(0);
+  if (previous.addr == primary.addr) {
+    return;
+  }
+  // Public DNS cannot answer private LAN records. Keep it as the backup.
+  if (previous.addr != 0) {
+    dns_setserver(1, &previous);
+  }
+  dns_setserver(0, &primary);
+  Serial.print("DNS primary (LAN gateway): ");
+  Serial.println(gateway);
+  Serial.print("DNS backup: ");
+  Serial.println(IPAddress(dns_getserver(1).addr));
+}
+
+bool resolveHostname(const char* hostname, IPAddress& ip) {
+  SocketAddress address;
+  int result = WiFiInterface()->gethostbyname(hostname, &address, NSAPI_IPv4);
+  if (result != NSAPI_ERROR_OK) {
+    Serial.print("MQTT DNS lookup failed, error: ");
+    Serial.println(result);
+    return false;
+  }
+  if (!ip.fromString(address.get_ip_address())) {
+    Serial.println("MQTT DNS lookup returned an invalid IPv4 address");
+    return false;
+  }
+  Serial.print("MQTT DNS resolved ");
+  Serial.print(hostname);
+  Serial.print(" to ");
+  Serial.println(ip);
+  return true;
+}
+
+void disconnectMQTT() {
+  mqttWifiClient.stop();
+  mqttConnected = false;
+}
+
+bool mqttAcknowledged(MqttDelivery::Result result) {
+  switch (result) {
+    case MqttDelivery::Result::Acknowledged:
+      return true;
+    case MqttDelivery::Result::InvalidPacket:
+      Serial.println("MQTT invalid or oversized outgoing packet");
+      break;
+    case MqttDelivery::Result::WriteFailed:
+      Serial.println("MQTT socket write failed or incomplete");
+      break;
+    case MqttDelivery::Result::ReadFailed:
+      Serial.println("MQTT socket read failed");
+      break;
+    case MqttDelivery::Result::ConnectionClosed:
+      Serial.println("MQTT broker closed the connection");
+      break;
+    case MqttDelivery::Result::Timeout:
+      Serial.println("MQTT acknowledgement timeout (5 seconds)");
+      break;
+    case MqttDelivery::Result::InvalidAcknowledgement:
+      Serial.println("MQTT acknowledgement rejected, malformed, or packet ID mismatch");
+      break;
+  }
+  disconnectMQTT();
   return false;
 }
 
-// Simple MQTT Connect
 bool connectMQTT() {
-  // Use cached IP if available
-  IPAddress targetIP;
-  if (mqttIPResolved) {
-    targetIP = cachedMqttIP;
-    Serial.print("Using cached MQTT IP: ");
-    Serial.println(targetIP);
-  } else {
-    Serial.println("Resolving MQTT server IP...");
-    if (resolveHostname(config.mqttServer, targetIP)) {
-      cachedMqttIP = targetIP;
-      mqttIPResolved = true;
-    } else {
-      Serial.println("Failed to resolve MQTT server");
-      return false;
-    }
-  }
-  
-  // Test basic connectivity first
-  Serial.println("Testing basic network connectivity...");
-  WiFiClient testClient;
-  if (testClient.connect(targetIP, config.mqttPort)) {
-    Serial.println("Basic connectivity test passed (port 1883)");
-    testClient.stop();
-    delay(100); // Small delay before main connection
-  } else {
-    Serial.println("Basic connectivity test failed (port 1883)");
-  }
-  
+  // A stale socket prevents this WiFiClient implementation from reconnecting.
+  disconnectMQTT();
   Serial.print("Connecting to MQTT broker at ");
-  Serial.print(targetIP);
+  Serial.print(config.mqttServer);
   Serial.print(":");
   Serial.println(config.mqttPort);
   
-  Serial.println("Attempting TCP connection...");
-  Serial.print("WiFi status before connect: ");
-  Serial.println(WiFi.status());
-  
+  IPAddress targetIP;
+  if (!resolveHostname(config.mqttServer, targetIP)) {
+    return false;
+  }
   if (!mqttWifiClient.connect(targetIP, config.mqttPort)) {
-    Serial.println("TCP connection failed");
-    Serial.print("WiFi status after failed connect: ");
-    Serial.println(WiFi.status());
-    Serial.print("Client connected status: ");
-    Serial.println(mqttWifiClient.connected());
+    Serial.println("MQTT TCP connection failed after DNS resolution");
     return false;
   }
   
-  Serial.println("TCP connected, sending MQTT CONNECT...");
-  
-  // Build MQTT CONNECT packet
-  uint8_t packet[128];
-  int pos = 0;
-  
-  // Fixed header
-  packet[pos++] = 0x10;  // CONNECT packet type
-  int lenPos = pos++;    // Length placeholder
-  
-  // Variable header
-  packet[pos++] = 0x00; packet[pos++] = 0x06; // Protocol name length
-  packet[pos++] = 'M'; packet[pos++] = 'Q'; packet[pos++] = 'I'; packet[pos++] = 's'; packet[pos++] = 'd'; packet[pos++] = 'p';
-  packet[pos++] = 0x03;  // Protocol version (MQTT 3.1)
-  packet[pos++] = 0x02;  // Connect flags (clean session)
-  packet[pos++] = 0x00; packet[pos++] = 0x3C;  // Keep alive (60 seconds)
-  
-  // Payload - Client ID
-  int idLen = strlen(config.deviceId);
-  packet[pos++] = 0x00; packet[pos++] = idLen;
-  memcpy(&packet[pos], config.deviceId, idLen);
-  pos += idLen;
-  
-  // Set remaining length
-  packet[lenPos] = pos - 2;
-  
-  // Send packet
-  Serial.print("Sending MQTT CONNECT packet (");
-  Serial.print(pos);
-  Serial.print(" bytes): ");
-  for (int i = 0; i < pos; i++) {
-    Serial.print("0x");
-    if (packet[i] < 16) Serial.print("0");
-    Serial.print(packet[i], 16);  // 16 for hex format
-    Serial.print(" ");
-  }
-  Serial.println();
-  
-  mqttWifiClient.write(packet, pos);
-  Serial.println("Packet sent, waiting for CONNACK...");
-  
-  // Wait for CONNACK
-  unsigned long timeout = millis() + 5000;
-  Serial.println("Waiting for CONNACK response...");
-  
-  // Wait for at least some data
-  while (millis() < timeout && mqttWifiClient.available() == 0) {
-    delay(10);
-  }
-  
-  if (mqttWifiClient.available() > 0) {
-    Serial.print("Received ");
-    Serial.print(mqttWifiClient.available());
-    Serial.println(" bytes from broker");
-    
-    // Give it a moment for the complete packet to arrive
-    delay(50);
-    
-    Serial.print("Total bytes available: ");
-    Serial.println(mqttWifiClient.available());
-  }
-  
-  if (mqttWifiClient.available() >= 4) {
-    uint8_t response[4];
-    mqttWifiClient.read(response, 4);
-    
-    Serial.print("CONNACK response: ");
-    for (int i = 0; i < 4; i++) {
-      Serial.print("0x");
-      if (response[i] < 16) Serial.print("0");
-      Serial.print(response[i], 16);
-      Serial.print(" ");
-    }
-    Serial.println();
-    
-    if (response[0] == 0x20 && response[3] == 0x00) {
-      Serial.println("MQTT connected successfully!");
-      return true;
-    } else {
-      Serial.print("MQTT CONNACK failed, return code: ");
-      Serial.println(response[3]);
-    }
-  } else if (mqttWifiClient.available() >= 1) {
-    // Try to read whatever we got
-    uint8_t partialResponse[4] = {0};
-    int bytesRead = mqttWifiClient.read(partialResponse, mqttWifiClient.available());
-    Serial.print("Received CONNACK (");
-    Serial.print(bytesRead);
-    Serial.println(" bytes): ");
-    for (int i = 0; i < bytesRead; i++) {
-      Serial.print("0x");
-      if (partialResponse[i] < 16) Serial.print("0");
-      Serial.print(partialResponse[i], 16);
-      Serial.print(" ");
-    }
-    Serial.println();
-    
-    // If we got 0x20, that's the CONNACK message type - treat as success
-    if (partialResponse[0] == 0x20) {
-      Serial.println("MQTT connection successful (broker sent CONNACK 0x20)!");
-      return true;
-    }
-  } else {
-    Serial.println("MQTT CONNACK timeout - insufficient data");
-  }
-  
-  mqttWifiClient.stop();
-  return false;
+  return mqttAcknowledged(MqttDelivery::connect(
+      mqttWifiClient, config.deviceId, NSAPI_ERROR_WOULD_BLOCK, millis, delay));
 }
 
-// Simple MQTT Publish
 bool publishMQTT(const char* topic, const char* payload) {
   if (!mqttWifiClient.connected()) {
     Serial.println("MQTT not connected");
+    disconnectMQTT();
     return false;
   }
-  
-  int topicLen = strlen(topic);
-  int payloadLen = strlen(payload);
-  
-  // Calculate remaining length (topic length field + topic + payload)
-  int remainingLength = 2 + topicLen + payloadLen;
-  
-  // Build PUBLISH packet
-  uint8_t packet[1024];  // Increased buffer size for large JSON payloads
-  int pos = 0;
-  
-  // Fixed header
-  packet[pos++] = 0x30;  // PUBLISH packet type (QoS 0, no retain, no dup)
-  
-  // Variable length encoding for remaining length
-  if (remainingLength < 128) {
-    packet[pos++] = remainingLength;
-  } else if (remainingLength < 16384) {
-    packet[pos++] = (remainingLength % 128) | 0x80;
-    packet[pos++] = remainingLength / 128;
-  } else {
-    // For very large packets, we'd need more bytes, but this should be sufficient
-    Serial.println("MQTT payload too large");
-    return false;
+  if (++mqttPacketId == 0) {
+    ++mqttPacketId;
   }
-  
-  // Topic length (MSB, LSB)
-  packet[pos++] = (topicLen >> 8) & 0xFF;
-  packet[pos++] = topicLen & 0xFF;
-  
-  // Topic
-  memcpy(&packet[pos], topic, topicLen);
-  pos += topicLen;
-  
-  // Payload (no length field for payload in PUBLISH packets)
-  memcpy(&packet[pos], payload, payloadLen);
-  pos += payloadLen;
-  
-  // Debug output
-  Serial.print("MQTT PUBLISH packet (");
-  Serial.print(pos);
-  Serial.print(" bytes): Topic=");
+  Serial.print("MQTT QoS 1 PUBLISH: Topic=");
   Serial.print(topic);
-  Serial.print(", Payload size=");
-  Serial.println(payloadLen);
-  
-  size_t written = mqttWifiClient.write(packet, pos);
-  Serial.print("MQTT bytes written: ");
-  Serial.print(written);
-  Serial.print("/");
-  Serial.println(pos);
-  
-  if (written != pos) {
-    Serial.println("MQTT write failed!");
-    return false;
-  }
-  
-  mqttWifiClient.flush();
-  Serial.println("MQTT message published and flushed");
-  return true;
+  Serial.print(", Packet ID=");
+  Serial.println(mqttPacketId);
+  return mqttAcknowledged(MqttDelivery::publish(
+      mqttWifiClient, topic, payload, mqttPacketId,
+      NSAPI_ERROR_WOULD_BLOCK, millis, delay));
 }
 
 // Web server functions - optimized for speed
@@ -853,7 +707,7 @@ void sendControlPage(WiFiClient &client) {
   char body[4096];
   
   // Calculate time since last network activity for watchdog display
-  unsigned long timeSinceActivity = (millis() - lastSuccessfulNetworkActivity) / 1000; // seconds
+  unsigned long timeSinceActivity = uint32_t(millis() - mqttWatchdog.lastAcknowledged) / 1000;
   unsigned long timeoutRemaining = 0;
   if (watchdogEnabled && timeSinceActivity < (NETWORK_WATCHDOG_TIMEOUT / 1000)) {
     timeoutRemaining = (NETWORK_WATCHDOG_TIMEOUT / 1000) - timeSinceActivity;
@@ -1117,7 +971,7 @@ void manageWiFi() {
         Screen.print(3, "WiFi lost!");
       }
       webServerStarted = false;
-      mqttConnected = false;
+      disconnectMQTT();
       
       // Try to reconnect every 30 seconds
       if (now - lastWifiRetry > WIFI_RETRY_INTERVAL) {
@@ -1140,6 +994,7 @@ void manageWiFi() {
         }
         
         if (WiFi.status() == WL_CONNECTED) {
+          configureNetworkDNS();
           Serial.println("\nWiFi reconnected!");
           Serial.print("IP: ");
           Serial.println(WiFi.localIP());
@@ -1158,6 +1013,7 @@ void manageWiFi() {
     } else {
       // WiFi is connected
       if (!webServerStarted) {
+        configureNetworkDNS();
         // Start web server if not already started
         webServer.begin();
         webServerStarted = true;
@@ -1489,7 +1345,7 @@ void webServerThreadFunc() {
           else if (path == "/watchdog") {
             if (fullPath.indexOf("state=enable") > 0) {
               watchdogEnabled = true;
-              lastSuccessfulNetworkActivity = millis(); // Reset timer when enabling
+              mqttWatchdog.reset(millis());
               Serial.println("Watchdog ENABLED via web interface");
             } else if (fullPath.indexOf("state=disable") > 0) {
               watchdogEnabled = false;
@@ -1617,6 +1473,7 @@ void setup() {
   
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nWiFi connected!");
+    configureNetworkDNS();
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
     
@@ -1652,8 +1509,8 @@ void setup() {
   }
   
   // Initialize network watchdog timer
-  lastSuccessfulNetworkActivity = millis();
-  Serial.println("Network watchdog initialized (1 minute timeout)");
+  mqttWatchdog.reset(millis());
+  Serial.println("MQTT watchdog initialized (5 missed deliveries or 5 minutes without PUBACK)");
   
   // After everything is initialized, turn off the status LEDs
   disableStatusLedsOnce();
@@ -1677,6 +1534,11 @@ void loop() {
   
   // Manage WiFi connection with retry logic
   manageWiFi();
+  now = millis();
+  if (mqttConnected && !mqttWifiClient.connected()) {
+    Serial.println("MQTT socket disconnected; scheduling reconnection");
+    disconnectMQTT();
+  }
   
   // Try to connect MQTT if not connected (non-blocking retry)
     static unsigned long lastMqttAttempt = 0;
@@ -1703,6 +1565,8 @@ void loop() {
         Serial.println("MQTT connection failed, will retry in 10 seconds");
       }
     }
+
+    now = millis();
 
     // Read sensors every 30 seconds
     if (now - lastSensorRead > 30000) {
@@ -1821,7 +1685,7 @@ void loop() {
     }
     
     // Publish to MQTT every 30 seconds (separate from sensor reading)
-    if (mqttConnected && now - lastMqttPublish > 30000) {
+    if (now - lastMqttPublish > 30000) {
       lastMqttPublish = now;
       
       // Create JSON payload with latest sensor values
@@ -1839,17 +1703,20 @@ void loop() {
       Serial.print("MQTT JSON: ");
       Serial.println(jsonPayload);
       
-      if (publishMQTT(config.mqttTopic, jsonPayload)) {
-        Serial.println("MQTT published successfully");
-        // Update watchdog - successful network activity
-        lastSuccessfulNetworkActivity = millis();
+      if (mqttConnected && publishMQTT(config.mqttTopic, jsonPayload)) {
+        Serial.println("MQTT delivery acknowledged by broker (PUBACK)");
+        mqttWatchdog.reset(millis());
       } else {
-        Serial.println("MQTT publish failed, will retry");
+        mqttWatchdog.missed();
+        Serial.print("MQTT delivery missed; consecutive failures: ");
+        Serial.print(mqttWatchdog.missedDeliveries);
+        Serial.print("/");
+        Serial.println(MqttDelivery::MAX_MISSED_DELIVERIES);
         if (displayEnabled) {
           Screen.print(3, "MQTT failed!");
         }
-        // Don't disconnect - just retry next time
       }
+      checkNetworkWatchdog();
     }
     
     // Heartbeat LED - use RGB LED instead of built-in (only if enabled)

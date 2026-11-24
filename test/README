@@ -9,3 +9,14 @@ in the development cycle.
 
 More information about PlatformIO Unit Testing:
 - https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+
+MQTT delivery and recovery regression tests run on the host without board
+libraries or a broker:
+
+clang++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -Iinclude test/test_mqtt_delivery/test_main.cpp -o test/az3166-test-mqtt
+./test/az3166-test-mqtt
+rm test/az3166-test-mqtt
+
+These tests use a nonblocking fake socket to cover fragmented CONNACK/PUBACK,
+rejected or incomplete acknowledgements, missing replies, disconnects, partial
+writes, packet size limits, consecutive delivery failures and timer rollover.

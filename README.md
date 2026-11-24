@@ -7,7 +7,8 @@ A pure STM32-based sensor monitoring solution for the Azure IoT DevKit (MXChip A
 - **Pure STM32 Implementation**: Bypasses Azure framework for lightweight operation
 - **Multi-Sensor Support**: Temperature, humidity, pressure, accelerometer, gyroscope, magnetometer
 - **Persistent Configuration**: Flash memory storage for device settings
-- **MQTT Publishing**: Direct MQTT publishing of sensor data in JSON format
+- **MQTT Publishing**: QoS 1 JSON telemetry with matching broker acknowledgements
+- **Automatic Recovery**: Reconnect after failed deliveries; reboot after 5 consecutive missed deliveries or 5 minutes without a PUBACK (see [WATCHDOG.md](WATCHDOG.md))
 - **Serial Configuration**: Interactive serial interface for device configuration
 - **WiFi Connectivity**: Direct WiFi connection without Azure dependencies
 - **OLED Display**: Real-time sensor display on the device
@@ -58,6 +59,15 @@ The device supports both default configuration and interactive serial configurat
 3. Configure: Device ID, WiFi credentials, MQTT server settings
 4. Configuration is automatically saved to flash memory
 
+### DNS
+
+The MQTT server can be a hostname or an IPv4 address; no broker IP is hardcoded.
+After each WiFi connection, firmware uses the LAN gateway as the primary DNS
+server and retains the previously configured resolver as backup. The gateway
+must provide DNS for private LAN hostnames; public resolvers cannot answer
+private records. Resolution failures are logged and retried under the MQTT
+recovery policy.
+
 ## Data Format
 
 The device publishes JSON sensor data to the configured MQTT topic:
@@ -97,7 +107,7 @@ If you don't have PlatformIO installed, you can use pre-built binaries:
 **STM32CubeProgrammer (Recommended):**
 1. Download from ST Microelectronics website (free registration required)
 2. Put AZ3166 in DFU mode (hold A+B, release B, release A)
-3. Flash `firmware.bin` to address `0x08000000`
+3. Flash the application `firmware.bin` to address `0x0800C000`, preserving the bootloader at `0x08000000`
 
 **st-flash (Command Line):**
 ```bash
@@ -105,12 +115,21 @@ If you don't have PlatformIO installed, you can use pre-built binaries:
 brew install stlink
 
 # Flash the binary
-st-flash write firmware.bin 0x8000000
+st-flash write firmware.bin 0x0800C000
 ```
 
 ⚠️ **Note**: Drag-and-drop to the AZ3166 volume is NOT reliable and can brick the device.
 
 See `FLASHING_GUIDE.md` in releases for complete instructions.
+
+The framework links the application at `0x0800C000`. Do not write a standalone
+application binary at `0x08000000`: that overwrites the bootloader. Configuration
+is stored separately in sector 10 at `0x080C0000`.
+
+The board uses the legacy GCC 6.3.1 toolchain. Its macOS executable is x86_64;
+on Apple Silicon without translation, build in a local Linux x86_64 container
+using the same PlatformIO configuration, then upload the binary with a native
+ST-Link tool at the application address above.
 
 ## Build Configuration
 
