@@ -7,7 +7,7 @@ const page = fs.readFileSync('include/OtaPage.h', 'utf8');
 const script = page.split('<script>')[1].split("const token=")[0];
 const context = vm.createContext({});
 vm.runInContext(script, context);
-for (const length of [0, 3, 55, 56, 63, 64, 65, 512, 395400, 999424]) {
+for (const length of [0, 3, 55, 56, 63, 64, 65, 512, 395400, 622592, 999424]) {
   const bytes = crypto.randomBytes(length);
   const input = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   const actual = Buffer.from(context.sha256Fallback(input)).toString('hex');

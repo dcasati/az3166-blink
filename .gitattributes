@@ -1,0 +1,3 @@
+# Preserve upstream source bytes, including original line endings and whitespace.
+bootloader/third_party/*.c -text -whitespace
+bootloader/third_party/mbedtls/*.h -text -whitespace

@@ -7,12 +7,18 @@
 #include "mbedtls/base64.h"
 #include "mbedtls/sha256.h"
 #include "rtos.h"
+#include "Recovery.h"
+#include "RecoveryService.h"
 
 extern DeviceConfig config;
 void resetMqttWatchdog();
 
 namespace {
+#ifdef AZ3166_RECOVERY
+const uint32_t MAX_IMAGE = Recovery::IMAGE_LIMIT;
+#else
 const uint32_t MAX_IMAGE = 0xF4000;
+#endif
 const uint32_t SESSION_TIMEOUT = 180000;
 rtos::Mutex stateMutex;
 enum class State { Idle, Receiving, Staged, Applying };
@@ -84,9 +90,18 @@ bool verifyStaging(uint32_t length, const uint8_t expected[32], uint16_t& crc) {
   mbedtls_sha256_finish(&sha, digest);
   mbedtls_sha256_free(&sha);
   CRC16_Final(&checksum, &crc);
+#ifdef AZ3166_RECOVERY
+  Recovery::Tag tag;
+  uint32_t tagOffset = Recovery::TAG_OFFSET;
+  ok = ok && Recovery::validLength(length) &&
+      MicoFlashRead(MICO_PARTITION_OTA_TEMP, &tagOffset,
+                    reinterpret_cast<uint8_t*>(&tag), sizeof(tag)) == kNoErr &&
+      memcmp(&tag, &Recovery::IMAGE_TAG, sizeof(tag)) == 0;
+#endif
   return ok && memcmp(digest, expected, 32) == 0;
 }
 
+#ifndef AZ3166_RECOVERY
 bool commitBootMetadata(uint32_t length, uint16_t crc) {
   mico_Context_t* context = mico_system_context_get();
   if (!context || !otaPartitionsValid()) return false;
@@ -116,6 +131,7 @@ bool commitBootMetadata(uint32_t length, uint16_t crc) {
   }
   return ok;
 }
+#endif
 
 } // namespace
 
@@ -187,6 +203,11 @@ bool handleOtaRequest(WiFiClient& client, const Http::Request& request) {
   if (strcmp(request.path, "/ota") == 0 && strcmp(request.method, "GET") == 0) {
     String body(OTA_PAGE);
     body.replace("__CSRF__", adminCsrfToken());
+#ifdef AZ3166_RECOVERY
+    body.replace("999424", String(int(MAX_IMAGE)));
+    body.replace("No automatic rollback; ST-Link recovery may be required.",
+                 "Recovery ABI 1 required. Three trial boots; local health confirmation. ST-Link remains the last resort.");
+#endif
     httpReply(client, 200, body.c_str(), "text/html");
     return true;
   }
@@ -194,8 +215,15 @@ bool handleOtaRequest(WiFiClient& client, const Http::Request& request) {
     stateMutex.lock();
     const char* text = state == State::Staged ? "staged" :
                        state == State::Idle ? "idle" : "busy";
-    char body[160];
-    snprintf(body, sizeof(body), "{\"state\":\"%s\",\"csrf\":\"%s\"}", text, adminCsrfToken());
+    RecoveryStatus recovery = recoveryStatus();
+    char body[384];
+    snprintf(body, sizeof(body),
+        "{\"state\":\"%s\",\"csrf\":\"%s\",\"recovery\":\"%s\","
+        "\"attempts\":%lu,\"reason\":%lu,\"recoveryError\":%lu,"
+        "\"bootloader\":%s,\"maxImage\":%lu}",
+        text, adminCsrfToken(), recovery.state, (unsigned long)recovery.attempts,
+        (unsigned long)recovery.reason, (unsigned long)recovery.error,
+        recovery.bootloader ? "true" : "false", (unsigned long)MAX_IMAGE);
     stateMutex.unlock();
     httpReply(client, 200, body, "application/json");
     return true;
@@ -256,6 +284,12 @@ bool handleOtaRequest(WiFiClient& client, const Http::Request& request) {
     httpReply(client, 400, "Unknown OTA route");
     return true;
   }
+#ifdef AZ3166_RECOVERY
+  if (!recoveryCanUpload() || !Recovery::validLength(request.length)) {
+    httpReply(client, 409, "Recovery not ready, incompatible length, or staging pinned for trial/promotion");
+    return true;
+  }
+#endif
   uint8_t expected[32];
   if (!request.hasLength || request.length < 8 || request.length > MAX_IMAGE ||
       !Http::fromHex(request.sha256, expected, sizeof(expected)) ||
@@ -273,7 +307,16 @@ bool handleOtaRequest(WiFiClient& client, const Http::Request& request) {
   state = State::Receiving;
   stateMutex.unlock();
   uint32_t eraseSize = (request.length + 4095) & ~4095u;
+#ifdef AZ3166_RECOVERY
+  bool ok = true;
+  for (uint32_t offset = 0; ok && offset < eraseSize; offset += 4096) {
+    ok = uint32_t(millis() - sessionStarted) < SESSION_TIMEOUT &&
+        MicoFlashErase(MICO_PARTITION_OTA_TEMP, offset, 4096) == kNoErr;
+    Thread::wait(1);
+  }
+#else
   bool ok = MicoFlashErase(MICO_PARTITION_OTA_TEMP, 0, eraseSize) == kNoErr;
+#endif
   uint8_t buffer[512];
   uint32_t received = 0, lastData = millis();
   while (ok && received < request.length) {
@@ -339,8 +382,18 @@ void pollOta() {
   bool apply = state == State::Applying && activationReady;
   stateMutex.unlock();
   if (apply) {
-    if (!storedConfigDurable() || !commitBootMetadata(stagedLength, stagedCRC)) {
+    bool durable = storedConfigDurable();
+#ifdef AZ3166_RECOVERY
+    bool committed = durable && requestRecoveryInstall(stagedLength, stagedHash);
+#else
+    bool committed = durable && commitBootMetadata(stagedLength, stagedCRC);
+#endif
+    if (!committed) {
+#ifdef AZ3166_RECOVERY
+      Serial.println("RECOVERY: activation failed; updates locked; hardware watchdog remains required");
+#else
       Serial.println("OTA: activation failed; not rebooting");
+#endif
       stateMutex.lock(); clearSession(); stateMutex.unlock();
       return;
     }
@@ -360,6 +413,13 @@ void pollOperatorSerial() {
   while (Serial.available()) {
     char c = Serial.read();
     if (!passwordEntry) {
+#ifdef AZ3166_RECOVERY
+      if (c == 'B') {
+        Serial.println(requestRecoveryPreparation() ?
+            "RECOVERY: baseline preparation requested" :
+            "RECOVERY: preparation denied; require local health, vendor bootstrap, and unused reservation");
+      }
+#endif
       if (c == 'P') {
         passwordEntry = true; serialUsed = 0; passwordStarted = millis();
         passwordRejected = false;

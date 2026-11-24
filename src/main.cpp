@@ -16,11 +16,18 @@
 #include "MqttDelivery.h"
 #include "ConfigStorage.h"
 #include "OtaService.h"
+#include "RecoveryService.h"
 
 // Firmware version
 #ifndef FIRMWARE_VERSION
+#ifdef AZ3166_RECOVERY
+#define FIRMWARE_VERSION "1.2.0-recovery"
+#else
 #define FIRMWARE_VERSION "1.1.1"
 #endif
+#endif
+
+bool recoveryLocalHealthy = false;
 
 // Web server
 WiFiServer webServer(80);
@@ -807,6 +814,7 @@ void manageWiFi() {
           delay(500);
           Serial.print(".");
           attempts++;
+          recoveryStartupProgress();
         }
         
         if (WiFi.status() == WL_CONNECTED) {
@@ -1186,6 +1194,7 @@ void setup() {
   // Initialize hardware
   Serial.begin(115200);
   delay(2000);
+  beginRecovery();
   
   Serial.println("\n\n\n");
   Serial.println("=================================");
@@ -1199,6 +1208,12 @@ void setup() {
     Serial.println("CONFIG: recovery required; refusing defaults and network startup");
     while (true) delay(1000);
   }
+#ifdef AZ3166_RECOVERY
+  if (configLoad != ConfigLoad::Loaded && configLoad != ConfigLoad::Migrated) {
+    Serial.println("RECOVERY: durable settings required; provision with vendor firmware before bootstrap");
+    while (true) delay(1000);
+  }
+#endif
   if (configLoad == ConfigLoad::Empty) {
     // If no valid config found, load defaults
     loadDefaultConfig();
@@ -1206,11 +1221,14 @@ void setup() {
   } else {
     Serial.println("Configuration loaded from Flash storage");
   }
+  recoveryStartupProgress();
   
   // Check if user wants to configure the device
+#ifndef AZ3166_RECOVERY
   if (checkForConfigurationMode()) {
     configureDevice();
   }
+#endif
   
   // Show current configuration
   Serial.println("\n=== CURRENT CONFIGURATION ===");
@@ -1234,6 +1252,7 @@ void setup() {
   Screen.init();
   Screen.print(0, config.deviceId);
   Screen.print(2, "Sensors + MQTT");
+  recoveryStartupProgress();
   
 
   
@@ -1242,19 +1261,31 @@ void setup() {
   i2c = new DevI2C(D14, D15);
   
   ht_sensor = new HTS221Sensor(*i2c);
-  ht_sensor->init(NULL);
-  ht_sensor->enable();
+  bool localSensors = ht_sensor->init(NULL) == 0;
+  localSensors = (ht_sensor->enable() == 0) && localSensors;
   
   pressure_sensor = new LPS22HBSensor(*i2c);
-  pressure_sensor->init(NULL);
+  localSensors = (pressure_sensor->init(NULL) == 0) && localSensors;
   
   acc_gyro = new LSM6DSLSensor(*i2c, D4, D5);
-  acc_gyro->init(NULL);
-  acc_gyro->enableAccelerator();
-  acc_gyro->enableGyroscope();
+  localSensors = (acc_gyro->init(NULL) == 0) && localSensors;
+  localSensors = (acc_gyro->enableAccelerator() == 0) && localSensors;
+  localSensors = (acc_gyro->enableGyroscope() == 0) && localSensors;
   
   magnetometer = new LIS2MDLSensor(*i2c);
-  magnetometer->init(NULL);
+  localSensors = (magnetometer->init(NULL) == 0) && localSensors;
+  recoveryLocalHealthy = localSensors && storedConfigDurable();
+  recoveryStartupProgress();
+#ifdef AZ3166_RECOVERY
+  if (recoveryLocalOnly() || !recoveryLocalHealthy) {
+    Serial.println(recoveryLocalHealthy ?
+        "RECOVERY: exercising local main-loop health before any network startup" :
+        "RECOVERY: local initialization failed; refusing confirmation");
+    mqttWatchdog.reset(millis());
+    disableStatusLedsOnce();
+    return;
+  }
+#endif
   
   Serial.println("All sensors initialized: temp, humidity, pressure, accelerometer, gyroscope, magnetometer!");
   
@@ -1268,6 +1299,7 @@ void setup() {
     delay(500);
     Serial.print(".");
     attempts++;
+    recoveryStartupProgress();
   }
   
   if (WiFi.status() == WL_CONNECTED) {
@@ -1317,8 +1349,15 @@ void setup() {
 
 // Arduino loop function - called repeatedly
 void loop() {
+  pollRecovery(recoveryLocalHealthy);
   pollOta();
   pollOperatorSerial();
+#ifdef AZ3166_RECOVERY
+  if (recoveryLocalOnly() || !recoveryLocalHealthy) {
+    delay(100);
+    return;
+  }
+#endif
   static int counter = 0;
   static unsigned long lastSensorRead = 0;
   static unsigned long lastMqttPublish = 0;  // Separate timer for MQTT

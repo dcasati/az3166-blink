@@ -63,6 +63,12 @@ public:
     if (!valid[0] && !valid[1]) {
       return erased[0] && erased[1] ? Load::Empty : Load::Failed;
     }
+    if (valid[0] && valid[1]) {
+      uint32_t distance = records[1].generation - records[0].generation;
+      if (distance == 0x80000000u ||
+          (distance == 0 && memcmp(&records[0], &records[1], sizeof(records[0])) != 0))
+        return Load::Failed;
+    }
     unsigned slot = valid[1] && (!valid[0] ||
         (records[1].generation != records[0].generation &&
          uint32_t(records[1].generation - records[0].generation) < 0x80000000u))

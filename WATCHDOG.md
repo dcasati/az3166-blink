@@ -5,6 +5,21 @@ The AZ3166 MQTT watchdog monitors broker-acknowledged telemetry, not just WiFi
 association. Firmware 1.1.1 retains MQTT reconnection/reboot behavior and adds
 bounded OTA maintenance.
 
+The opt-in `az3166_recovery` build adds a **separate mandatory hardware IWDG**
+started by the experimental source-built recovery bootloader. The web toggle
+below controls only MQTT-delivery policy; it cannot disable IWDG. Trial health
+is confirmed before network startup and never depends on MQTT, WiFi, or DNS.
+Controlled one-board tests demonstrated three actual watchdog resets followed
+by automatic restoration; observed hang-to-next-boot intervals were about
+32.3 seconds. This is not a guaranteed timeout or broad hardware qualification.
+See [bootloader/README.md](bootloader/README.md) for specification-derived bounds,
+remaining timing checks, failure latching, and separate bootstrap approval.
+
+A 190-second RAM-only broker outage exercised the MQTT-delivery watchdog's
+reboot without rollback or consuming another trial. Separate 90-second
+WiFi/DNS outages caused no rollback or unsolicited restart. These results apply
+to the tested board/images, not arbitrary blocking SDK/network failures.
+
 ## Features
 
 ### Automatic Reboot
@@ -67,7 +82,7 @@ bool watchdogEnabled = true;
 
 #### `POST /watchdog`, body `state=disable`
 - Disables the network watchdog
-- Device will not auto-reboot
+- Disables MQTT-triggered reboots, not a recovery build's mandatory hardware watchdog
 
 Both require the operator's HTTP Basic credentials and the current
 `X-CSRF-Token`. GET mutations and URL query parameters are rejected. The

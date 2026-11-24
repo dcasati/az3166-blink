@@ -1,5 +1,13 @@
 # Manual AZ3166 OTA
 
+**Scope:** this document's existing procedures describe the hardware-verified
+vendor-bootloader builds (`az3166_app`, `mxchip_az3166`). A separate opt-in
+`az3166_recovery` build implements experimental automatic rollback with a
+source-built bootloader. Controlled one-board tests demonstrate three-attempt
+watchdog rollback and interrupted recovery; broader hardware/power-loss
+qualification is not claimed. Read [bootloader/README.md](bootloader/README.md); do not
+mix images or apply the vendor bootstrap procedure to the new bootloader.
+
 ## Trust boundary
 
 This is an operator-initiated updater for a **trusted LAN only**. HTTP Basic
@@ -9,7 +17,7 @@ detect transfer/readback errors, not publisher identity. Never expose port 80
 to the Internet or reuse this password elsewhere. The operator owns this
 accepted transport/authenticity risk.
 
-There is **no automatic rollback, A/B slot, secure boot, or anti-downgrade**.
+The vendor builds have **no automatic rollback, A/B slot, secure boot, or anti-downgrade**.
 An authorized operator can install an incompatible image. Power failure during
 bootloader copying may require ST-Link recovery. Keep stable power connected.
 
@@ -88,9 +96,10 @@ Keep-alive/pipelining and automatic URL downloads are not supported.
 | External RF firmware | `0x2000`, `0x6E000` bytes | Vendor; untouched |
 | External OTA staging | `0x70000`, `0xF4000` bytes | Updater |
 | External configuration | `0x164000`, `0x165000`, 4 KiB each | This application |
-| Remaining FILESYS space | `0x166000` onward | Not currently used |
+| Remaining FILESYS space | `0x166000` onward | Reserved by opt-in recovery; unused by vendor build |
 
-**Future filesystem support must exclude the first 8 KiB of FILESYS**. Never
+**Future filesystem support must exclude configuration and all enabled recovery
+reservations (the entire FILESYS extent in recovery builds)**. Never
 mount/format the entire partition. Runtime checks require the known partition
 map; first migration also verifies both complete sectors are unused/erased.
 
@@ -150,5 +159,7 @@ settings, accepted the stored password and produced two more MQTT PUBACKs.
 Both build aliases produced the same BIN: 278,596 bytes, with 46,484 bytes of
 static RAM reported by PlatformIO.
 
-Power cuts during erase/copy, failed physical QSPI writes, post-install crashes
-and automatic recovery/rollback are **not claimed as hardware-tested**.
+The vendor-path tests did not exercise post-install automatic recovery.
+The separate recovery build's controlled watchdog/interruption results are
+recorded in [bootloader/README.md](bootloader/README.md). Neither test campaign
+demonstrates physical power-loss/brownout recovery or failed physical flash cells.

@@ -28,8 +28,41 @@ clang++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -Iinclude 
 rm test/az3166-test-ota
 node test/test_ota/test_checksum.js
 
+The production shared recovery engine has a separate sanitizer-enabled NOR
+model. It uses real region/sector sizes, real SHA-256, commit-last records,
+and reset injection before/within/after every modeled persistent operation.
+It does not exercise a physical flash controller or prove brownout behavior:
+
+python3 test/test_ota/run_recovery.py
+
+Cases include three persisted attempts, no automatic retry, interrupted
+installation/restoration/promotion and first provisioning, corruption,
+incompatible image/config/watchdog ABI, full blank-ownership checks, ambiguous
+generations, rollover, read/write failures, committed-confirmation readback
+failure, staging reuse and the exact 608 KiB image limit. Local-health checks
+include minimum loop progress and millisecond rollover.
+
 Build both aliases with the supported GCC 6.3.1 toolchain:
 pio run -e az3166_app -e mxchip_az3166
+
+Build the experimental recovery application and source-only boot component
+without programming anything (supported Linux/amd64 GCC 6.3.1 environment):
+
+pio run -e az3166_recovery
+python3 bootloader/build.py --core-dir /root/.platformio
+
+The source build validates boot ABI/vectors/size and excludes SDK/RTOS,
+allocation and option-byte programming entry points. Controlled one-board
+tests passed three actual watchdog failures and interrupted install/restore/
+promotion, using private fixtures and temporary hardware breakpoints rather
+than shipping fault hooks. This does not qualify brownouts or other devices.
+RAM-only unhealthy local health also exhausted three hardware-watchdog trials.
+WiFi/DNS outages and the existing MQTT-delivery reboot policy did not cause
+rollback. Final full-flash readback verified protected boot, production image,
+fallback, metadata and unchanged configuration/authentication/RF bytes.
+Separate bootstrap/protection approval and private backups remain mandatory;
+see bootloader/README.md. The browser hardware harness below is for the existing
+vendor OTA path, not a substitute for controlled recovery testing.
 
 The opt-in hardware browser test performs a REAL firmware installation.
 Read OTA.md, retain ST-Link recovery, install pyserial and Playwright/Chromium,

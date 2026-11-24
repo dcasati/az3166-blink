@@ -15,6 +15,11 @@ A pure STM32-based sensor monitoring solution for the Azure IoT DevKit (MXChip A
 - **Web Control Panel**: Mobile-responsive web UI for device management
 - **Manual OTA**: Authenticated browser upload with readback verification and
   external configuration storage (see [OTA.md](OTA.md))
+- **Experimental OTA Rollback**: Opt-in source-built bootloader and
+  `az3166_recovery` application; three trial attempts, local-health confirmation,
+  and restartable fallback restoration. Controlled tests on one board passed
+  three hardware-watchdog failures and interrupted copying/promotion; **no
+  power-loss/brownout guarantee** (see [bootloader/README.md](bootloader/README.md)).
 
 ## Hardware Requirements
 
@@ -47,6 +52,12 @@ The device uses USB serial communication for configuration and monitoring:
 - Normal operation displays sensor readings and connection status
 - Send uppercase **'P'** during normal operation to provision/change the local
   operator password (16-64 printable, non-space ASCII characters, not echoed).
+
+The opt-in recovery build disables the blocking startup `C` menu. Its USB `B`
+command explicitly prepares a fallback only under the vendor bootloader, after
+local initialization and existing durable settings/password are valid. It
+checks the complete unused reservation before claiming it. This is not approval
+to bootstrap or change protection.
 
 ## Configuration
 
@@ -90,6 +101,11 @@ The device publishes JSON sensor data to the configured MQTT topic:
 ```
 
 ## Building and Uploading
+
+**The USB upload methods below are for vendor-bootloader boards.** After
+recovery bootstrap, build `platformio run -e az3166_recovery` and install the
+resulting BIN through authenticated OTA. Direct application flashing does not
+update the recovery journal and will trigger fallback restoration.
 
 ### Method 1: PlatformIO (Recommended)
 
