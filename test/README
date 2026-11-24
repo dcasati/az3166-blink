@@ -20,3 +20,30 @@ rm test/az3166-test-mqtt
 These tests use a nonblocking fake socket to cover fragmented CONNACK/PUBACK,
 rejected or incomplete acknowledgements, missing replies, disconnects, partial
 writes, packet size limits, consecutive delivery failures and timer rollover.
+
+OTA storage/parser/vector/legacy-configuration tests:
+
+clang++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -Iinclude test/test_ota/test_main.cpp -o test/az3166-test-ota
+./test/az3166-test-ota
+rm test/az3166-test-ota
+node test/test_ota/test_checksum.js
+
+Build both aliases with the supported GCC 6.3.1 toolchain:
+pio run -e az3166_app -e mxchip_az3166
+
+The opt-in hardware browser test performs a REAL firmware installation.
+Read OTA.md, retain ST-Link recovery, install pyserial and Playwright/Chromium,
+and keep power connected. Run --help first:
+
+python test/test_ota/hardware_browser.py --help
+
+Supply a private mode-0600 credentials JSON containing url, username and
+password; do not put credentials in command arguments or git. Example invocation:
+
+python test/test_ota/hardware_browser.py --credentials-file /private/operator.json --image /private/firmware.bin --expected-version 1.1.1 --serial /dev/cu.usbmodem12303 --log /private/new-ota-test.log --install
+
+The log must not already exist. It is created mode 0600 and can contain private
+device settings from the serial console. The test uses actual browser HTTP
+hashing/upload, rejects wrong-hash and stale apply, verifies reset is blocked
+during staging, installs, compares settings, reauthenticates, and waits for two
+MQTT PUBACKs after boot. It never interrupts bootloader installation.

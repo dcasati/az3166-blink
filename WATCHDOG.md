@@ -1,7 +1,9 @@
 # Network Watchdog Feature
 
 ## Overview
-The AZ3166 MQTT watchdog monitors broker-acknowledged telemetry, not just WiFi association. Firmware 1.0.3 reconnects after failed deliveries and reboots after repeated failures.
+The AZ3166 MQTT watchdog monitors broker-acknowledged telemetry, not just WiFi
+association. Firmware 1.1.1 retains MQTT reconnection/reboot behavior and adds
+bounded OTA maintenance.
 
 ## Features
 
@@ -59,13 +61,28 @@ bool watchdogEnabled = true;
 
 ### Endpoints
 
-#### `/watchdog?state=enable`
+#### `POST /watchdog`, body `state=enable`
 - Enables the network watchdog
 - Resets the acknowledgement timer and missed-delivery counter
 
-#### `/watchdog?state=disable`
+#### `POST /watchdog`, body `state=disable`
 - Disables the network watchdog
 - Device will not auto-reboot
+
+Both require the operator's HTTP Basic credentials and the current
+`X-CSRF-Token`. GET mutations and URL query parameters are rejected. The
+authenticated control page supplies these automatically.
+
+### OTA maintenance
+
+An authenticated upload starts a three-minute maintenance window. Watchdog
+reboots are deferred during reception, readback verification, staging and
+activation, without changing the operator's enabled/disabled setting. Uploads
+also have a ten-second data-inactivity deadline. Discard, failure or staged
+expiry restores normal monitoring with a fresh acknowledgement grace period.
+Unauthenticated requests cannot start maintenance. Sensors and MQTT continue
+on the main thread; administrative mutations and serial password changes are
+blocked during OTA. See [OTA.md](OTA.md).
 
 ### Control Page
 The web control panel (`http://<device-ip>/control`) now includes:
@@ -105,6 +122,7 @@ The timer and counter are reset when:
 1. Monitoring starts after setup
 2. A matching PUBACK confirms a telemetry delivery
 3. The watchdog is enabled via the web interface
+4. OTA maintenance ends without installation
 
 WiFi association, TCP connection and successful CONNACK do not reset them.
 
@@ -144,9 +162,8 @@ WiFi association, TCP connection and successful CONNACK do not reset them.
 - Can be re-enabled without firmware update
 
 ## Memory Usage
-Firmware 1.0.3 (`az3166_app`, GCC 6.3.1):
-- RAM: 17.5% (45,780 bytes / 262,144 bytes)
-- Flash: 24.2% (253,676 bytes / 1,048,576 bytes)
+OTA-capable firmware uses approximately 17.7% static RAM and 26.6% flash
+(`az3166_app`, GCC 6.3.1). RTOS stacks and web-page allocations also use heap.
 
 ## Testing
 

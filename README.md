@@ -13,6 +13,8 @@ A pure STM32-based sensor monitoring solution for the Azure IoT DevKit (MXChip A
 - **WiFi Connectivity**: Direct WiFi connection without Azure dependencies
 - **OLED Display**: Real-time sensor display on the device
 - **Web Control Panel**: Mobile-responsive web UI for device management
+- **Manual OTA**: Authenticated browser upload with readback verification and
+  external configuration storage (see [OTA.md](OTA.md))
 
 ## Hardware Requirements
 
@@ -43,6 +45,8 @@ The device uses USB serial communication for configuration and monitoring:
 - Press **'C'** within 5 seconds of device startup to enter configuration mode
 - Configuration mode allows setting WiFi credentials and MQTT parameters
 - Normal operation displays sensor readings and connection status
+- Send uppercase **'P'** during normal operation to provision/change the local
+  operator password (16-64 printable, non-space ASCII characters, not echoed).
 
 ## Configuration
 
@@ -123,8 +127,12 @@ st-flash write firmware.bin 0x0800C000
 See `FLASHING_GUIDE.md` in releases for complete instructions.
 
 The framework links the application at `0x0800C000`. Do not write a standalone
-application binary at `0x08000000`: that overwrites the bootloader. Configuration
-is stored separately in sector 10 at `0x080C0000`.
+application binary at `0x08000000`: that overwrites the bootloader. Never use a
+generic ELF programmer: this legacy linker can include an ELF segment header at
+the bootloader address. Use the raw BIN and explicit application address.
+Firmware 1.1.1 migrates configuration from internal sector 10 to redundant
+external flash records before permitting OTA. See [OTA.md](OTA.md) for flash
+ownership, provisioning, limitations and recovery.
 
 The board uses the legacy GCC 6.3.1 toolchain. Its macOS executable is x86_64;
 on Apple Silicon without translation, build in a local Linux x86_64 container
@@ -135,11 +143,13 @@ ST-Link tool at the application address above.
 
 The project includes extensive build flags to disable Azure services:
 - Disables Azure IoT Hub telemetry
-- Disables OTA updates
+- Provides manual browser OTA; does not use the SDK HTTP downloader
 - Disables time synchronization
 - Removes Azure HTTP services
 - Excludes Azure framework system files
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License - see LICENSE file for details. The extracted mbed TLS PBKDF2
+function in `src/mbedtls_pbkdf2.c` is Apache-2.0; its notice and license are
+retained in that file and `third_party/mbedtls-LICENSE.txt`.

@@ -14,34 +14,19 @@
 #include "rtos.h"
 #include "Thread.h"
 #include "MqttDelivery.h"
+#include "ConfigStorage.h"
+#include "OtaService.h"
 
 // Firmware version
-#define FIRMWARE_VERSION "1.0.3"
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "1.1.1"
+#endif
 
 // Web server
 WiFiServer webServer(80);
 
 // Thread for web server
 rtos::Thread *webServerThread_ptr = NULL;
-
-// Flash storage for configuration (using STM32 internal flash)
-#define CONFIG_FLASH_SECTOR     FLASH_SECTOR_10    // Use sector 10 for config (128KB sector)
-#define CONFIG_FLASH_ADDRESS    0x080C0000         // Start of sector 10
-
-// Configuration structure (stored in Flash memory)
-struct DeviceConfig {
-  char magic[4];           // "AZ31" - magic bytes to verify valid config
-  char deviceId[32];       // Device name/ID
-  char model[16];          // Device model (e.g., "az3166")
-  char location[32];       // Device location (e.g., "Garage")
-  char ssid[32];          // WiFi SSID
-  char password[64];      // WiFi password
-  char mqttServer[64];    // MQTT server hostname
-  int mqttPort;           // MQTT port
-  char mqttTopic[64];     // MQTT topic
-  uint8_t checksum;       // Simple checksum
-  uint8_t padding[3];     // Explicit padding to ensure word alignment
-} __attribute__((packed));
 
 // Default configuration
 DeviceConfig config = {
@@ -58,198 +43,8 @@ DeviceConfig config = {
   {0, 0, 0}              // padding
 };
 
-// Flash storage functions for persistent configuration
-// Note: This implementation uses STM32 HAL Flash functions for real persistence
 bool saveConfigToFlash() {
-  // Clear checksum and padding before calculating
-  config.checksum = 0;
-  memset(config.padding, 0, sizeof(config.padding));
-  
-  // Calculate checksum over specific fields manually to avoid struct padding issues
-  uint8_t calculatedChecksum = 0;
-  
-  // Hash magic bytes (4 bytes)
-  for (int i = 0; i < 4; i++) {
-    calculatedChecksum ^= config.magic[i];
-  }
-  
-  // Hash device ID (32 bytes)
-  for (int i = 0; i < 32; i++) {
-    calculatedChecksum ^= config.deviceId[i];
-  }
-  
-  // Hash model (16 bytes)
-  for (int i = 0; i < 16; i++) {
-    calculatedChecksum ^= config.model[i];
-  }
-  
-  // Hash location (32 bytes)
-  for (int i = 0; i < 32; i++) {
-    calculatedChecksum ^= config.location[i];
-  }
-  
-  // Hash SSID (32 bytes)
-  for (int i = 0; i < 32; i++) {
-    calculatedChecksum ^= config.ssid[i];
-  }
-  
-  // Hash password (64 bytes)
-  for (int i = 0; i < 64; i++) {
-    calculatedChecksum ^= config.password[i];
-  }
-  
-  // Hash MQTT server (64 bytes)
-  for (int i = 0; i < 64; i++) {
-    calculatedChecksum ^= config.mqttServer[i];
-  }
-  
-  // Hash MQTT port (4 bytes)
-  uint8_t* portBytes = (uint8_t*)&config.mqttPort;
-  for (int i = 0; i < 4; i++) {
-    calculatedChecksum ^= portBytes[i];
-  }
-  
-  // Hash MQTT topic (64 bytes)
-  for (int i = 0; i < 64; i++) {
-    calculatedChecksum ^= config.mqttTopic[i];
-  }
-  
-  config.checksum = calculatedChecksum;
-  
-  Serial.println("Saving configuration to Flash...");
-  Serial.print("Calculated checksum: 0x");
-  Serial.println(config.checksum, 16);
-  Serial.print("Config size: ");
-  Serial.println(sizeof(DeviceConfig));
-  
-  // Unlock the Flash memory
-  HAL_FLASH_Unlock();
-  
-  // Erase the sector
-  FLASH_EraseInitTypeDef EraseInitStruct;
-  uint32_t SectorError = 0;
-  
-  EraseInitStruct.TypeErase = FLASH_TYPEERASE_SECTORS;
-  EraseInitStruct.VoltageRange = FLASH_VOLTAGE_RANGE_3;
-  EraseInitStruct.Sector = CONFIG_FLASH_SECTOR;
-  EraseInitStruct.NbSectors = 1;
-  
-  if (HAL_FLASHEx_Erase(&EraseInitStruct, &SectorError) != HAL_OK) {
-    Serial.println("Flash erase failed!");
-    HAL_FLASH_Lock();
-    return false;
-  }
-  
-  // Write the configuration data word by word
-  uint32_t* configData = (uint32_t*)&config;
-  uint32_t address = CONFIG_FLASH_ADDRESS;
-  int numWords = (sizeof(DeviceConfig) + 3) / 4;  // Round up to nearest word
-  
-  Serial.print("Writing ");
-  Serial.print(numWords);
-  Serial.println(" words to Flash...");
-  
-  for (int i = 0; i < numWords; i++) {
-    if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, address, configData[i]) != HAL_OK) {
-      Serial.print("Flash write failed at word ");
-      Serial.println(i);
-      HAL_FLASH_Lock();
-      return false;
-    }
-    address += 4;
-  }
-  
-  // Lock the Flash memory
-  HAL_FLASH_Lock();
-  
-  Serial.println("Configuration saved successfully to Flash!");
-  return true;
-}
-
-bool loadConfigFromFlash() {
-  Serial.println("Loading configuration from Flash...");
-  
-  // Read configuration from Flash
-  DeviceConfig* flashConfig = (DeviceConfig*)CONFIG_FLASH_ADDRESS;
-  
-  // Check magic bytes
-  Serial.print("Magic bytes from Flash: ");
-  for (int i = 0; i < 4; i++) {
-    Serial.print("0x");
-    Serial.print(flashConfig->magic[i], 16);
-    Serial.print(" ");
-  }
-  Serial.println();
-  
-  if (flashConfig->magic[0] != 'A' || flashConfig->magic[1] != 'Z' || 
-      flashConfig->magic[2] != '3' || flashConfig->magic[3] != '1') {
-    Serial.println("No valid magic bytes found in Flash");
-    return false;
-  }
-  
-  // Calculate checksum using the same field-by-field method as save
-  uint8_t calculatedChecksum = 0;
-  
-  // Hash magic bytes (4 bytes)
-  for (int i = 0; i < 4; i++) {
-    calculatedChecksum ^= flashConfig->magic[i];
-  }
-  
-  // Hash device ID (32 bytes)
-  for (int i = 0; i < 32; i++) {
-    calculatedChecksum ^= flashConfig->deviceId[i];
-  }
-  
-  // Hash model (16 bytes)
-  for (int i = 0; i < 16; i++) {
-    calculatedChecksum ^= flashConfig->model[i];
-  }
-  
-  // Hash location (32 bytes)
-  for (int i = 0; i < 32; i++) {
-    calculatedChecksum ^= flashConfig->location[i];
-  }
-  
-  // Hash SSID (32 bytes)
-  for (int i = 0; i < 32; i++) {
-    calculatedChecksum ^= flashConfig->ssid[i];
-  }
-  
-  // Hash password (64 bytes)
-  for (int i = 0; i < 64; i++) {
-    calculatedChecksum ^= flashConfig->password[i];
-  }
-  
-  // Hash MQTT server (64 bytes)
-  for (int i = 0; i < 64; i++) {
-    calculatedChecksum ^= flashConfig->mqttServer[i];
-  }
-  
-  // Hash MQTT port (4 bytes)
-  uint8_t* portBytes = (uint8_t*)&flashConfig->mqttPort;
-  for (int i = 0; i < 4; i++) {
-    calculatedChecksum ^= portBytes[i];
-  }
-  
-  // Hash MQTT topic (64 bytes)
-  for (int i = 0; i < 64; i++) {
-    calculatedChecksum ^= flashConfig->mqttTopic[i];
-  }
-  
-  Serial.print("Stored checksum: 0x");
-  Serial.println(flashConfig->checksum, 16);
-  Serial.print("Calculated checksum: 0x");
-  Serial.println(calculatedChecksum, 16);
-  
-  if (calculatedChecksum != flashConfig->checksum) {
-    Serial.println("Flash configuration checksum mismatch");
-    return false;
-  }
-  
-  // Copy valid configuration from Flash to RAM
-  memcpy(&config, flashConfig, sizeof(DeviceConfig));
-  Serial.println("Valid configuration loaded from Flash!");
-  return true;
+  return saveStoredConfig(config);
 }
 
 // Legacy variables for compatibility
@@ -289,6 +84,7 @@ const unsigned long WIFI_RETRY_INTERVAL = 30000; // Retry WiFi every 30 seconds
 
 // Only broker-acknowledged telemetry proves end-to-end connectivity.
 MqttDelivery::Watchdog mqttWatchdog;
+void resetMqttWatchdog() { mqttWatchdog.reset(millis()); }
 const unsigned long NETWORK_WATCHDOG_TIMEOUT = MqttDelivery::WATCHDOG_TIMEOUT_MS;
 bool watchdogEnabled = true;
 
@@ -334,7 +130,7 @@ void systemReboot() {
 
 // Network watchdog check - monitors network activity and reboots if needed
 void checkNetworkWatchdog() {
-  if (!watchdogEnabled) {
+  if (!watchdogEnabled || otaMaintenance()) {
     return;
   }
   
@@ -398,10 +194,11 @@ void loadDefaultConfig() {
   config.checksum = calculateChecksum(&config);
 }
 
-String readSerialString(const char* prompt, const char* defaultValue, int maxLength) {
+String readSerialString(const char* prompt, const char* defaultValue, int maxLength,
+                        bool secret = false) {
   Serial.print(prompt);
   Serial.print(" [");
-  Serial.print(defaultValue);
+  Serial.print(secret ? "hidden; blank keeps current" : defaultValue);
   Serial.print("]: ");
   
   String input = "";
@@ -416,11 +213,11 @@ String readSerialString(const char* prompt, const char* defaultValue, int maxLen
       } else if (c == '\b' || c == 127) { // Backspace
         if (input.length() > 0) {
           input.remove(input.length() - 1);
-          Serial.print("\b \b");
+          if (!secret) Serial.print("\b \b");
         }
       } else if (input.length() < maxLength - 1 && c >= 32 && c <= 126) {
         input += c;
-        Serial.print(c);
+        if (!secret) Serial.print(c);
       }
     }
     delay(10);
@@ -453,7 +250,7 @@ void configureDevice() {
   strcpy(config.ssid, newSSID.c_str());
   
   // WiFi Password
-  String newPassword = readSerialString("WiFi Password", config.password, sizeof(config.password));
+  String newPassword = readSerialString("WiFi Password", config.password, sizeof(config.password), true);
   strcpy(config.password, newPassword.c_str());
   
   // MQTT Server
@@ -461,7 +258,7 @@ void configureDevice() {
   strcpy(config.mqttServer, newMqttServer.c_str());
   
   // MQTT Port
-  String newMqttPort = readSerialString("MQTT Port", String(config.mqttPort).c_str(), 8);
+  String newMqttPort = readSerialString("MQTT Port", String(int(config.mqttPort)).c_str(), 8);
   config.mqttPort = newMqttPort.toInt();
   if (config.mqttPort <= 0 || config.mqttPort > 65535) {
     config.mqttPort = 1883;
@@ -627,6 +424,15 @@ bool publishMQTT(const char* topic, const char* payload) {
 }
 
 // Web server functions - optimized for speed
+String htmlEscape(const char* value) {
+  String escaped(value);
+  escaped.replace("&", "&amp;");
+  escaped.replace("<", "&lt;");
+  escaped.replace(">", "&gt;");
+  escaped.replace("\"", "&quot;");
+  escaped.replace("'", "&#39;");
+  return escaped;
+}
 
 // Standard HTTP 200 header with no-cache semantics
 void sendHttpHeader(WiFiClient &client, int contentLength, const char *contentType = "text/html") {
@@ -659,7 +465,7 @@ void sendHttpHeader(WiFiClient &client, int contentLength, const char *contentTy
 void sendMainPage(WiFiClient &client) {
   Serial.println("Sending main page");
   
-  char body[1600];
+  char body[2304];
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>%s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:20px;background:#f5f5f7;max-width:500px;margin:0 auto;text-align:center}"
@@ -677,12 +483,13 @@ void sendMainPage(WiFiClient &client) {
     "<a href='/control' class='btn-b'>CONTROL</a>"
     "<a href='/telemetry' style='background:#5856d6;color:#fff'>TELEMETRY</a>"
     "<a href='/setup' class='btn-o'>SETUP</a>"
+    "<a href='/ota' class='btn-o'>FIRMWARE UPDATE</a>"
     "<div class='ver'>v%s</div>"
     "</div></body></html>",
-    config.deviceId, config.deviceId,
+    htmlEscape(config.deviceId).c_str(), htmlEscape(config.deviceId).c_str(),
     mqttConnected ? "on" : "off",
     mqttConnected ? "CONNECTED" : "DISCONNECTED",
-    config.mqttServer, FIRMWARE_VERSION);
+    htmlEscape(config.mqttServer).c_str(), FIRMWARE_VERSION);
   
   if (bodyLen < 0) {
     bodyLen = 0;
@@ -699,6 +506,18 @@ void sendMainPage(WiFiClient &client) {
   client.write((const uint8_t*)body, bodyLen);
   client.flush();
   Serial.println("Main page sent!");
+}
+
+void sendAdminPage(WiFiClient& client, const char* body) {
+  String page(body);
+  page += "<script>document.addEventListener('submit',async e=>{e.preventDefault();"
+          "const f=e.target;try{const r=await fetch(f.action,{method:'POST',headers:{"
+          "'X-CSRF-Token':'";
+  page += adminCsrfToken();
+  page += "'},body:new URLSearchParams(new FormData(f))});"
+          "const t=await r.text();document.open();document.write(t);document.close();"
+          "}catch(x){alert(String(x))}});</script>";
+  httpReply(client, 200, page.c_str(), "text/html");
 }
 
 void sendControlPage(WiFiClient &client) {
@@ -732,26 +551,26 @@ void sendControlPage(WiFiClient &client) {
     "<div class='s'><span>MQTT:</span><span class='b %s'>%s</span><span style='color:#999'>|</span><span style='color:#999'>%s</span></div>"
     "<div class='s'><span>Watchdog:</span><span class='b %s'>%s</span>%s</div></div>"
     "<div class='c'>"
-    "<div class='row'><form action='/led' method='GET'><input type='hidden' name='state' value='on'><button class='g'>LED ON</button></form>"
-    "<form action='/led' method='GET'><input type='hidden' name='state' value='off'><button class='r'>LED OFF</button></form></div>"
-    "<div class='row'><form action='/display' method='GET'><input type='hidden' name='state' value='on'><button class='g'>Display ON</button></form>"
-    "<form action='/display' method='GET'><input type='hidden' name='state' value='off'><button class='r'>Display OFF</button></form></div>"
-    "<div class='row'><form action='/wifiled' method='GET'><input type='hidden' name='state' value='on'><button class='g'>WiFi LED ON</button></form>"
-    "<form action='/wifiled' method='GET'><input type='hidden' name='state' value='off'><button class='r'>WiFi LED OFF</button></form></div>"
-    "<div class='row'><form action='/azureled' method='GET'><input type='hidden' name='state' value='on'><button class='g'>Azure LED ON</button></form>"
-    "<form action='/azureled' method='GET'><input type='hidden' name='state' value='off'><button class='r'>Azure LED OFF</button></form></div>"
-    "<div class='row'><form action='/userled' method='GET'><input type='hidden' name='state' value='on'><button class='g'>User LED ON</button></form>"
-    "<form action='/userled' method='GET'><input type='hidden' name='state' value='off'><button class='r'>User LED OFF</button></form></div>"
-    "<div class='row'><form action='/watchdog' method='GET'><input type='hidden' name='state' value='enable'><button class='g'>Watchdog ON</button></form>"
-    "<form action='/watchdog' method='GET'><input type='hidden' name='state' value='disable'><button class='r'>Watchdog OFF</button></form></div>"
-    "<form action='/reset' method='GET' style='margin:16px 0 8px'><button class='u'>RESET</button></form>"
+    "<div class='row'><form action='/led' method='POST'><input type='hidden' name='state' value='on'><button class='g'>LED ON</button></form>"
+    "<form action='/led' method='POST'><input type='hidden' name='state' value='off'><button class='r'>LED OFF</button></form></div>"
+    "<div class='row'><form action='/display' method='POST'><input type='hidden' name='state' value='on'><button class='g'>Display ON</button></form>"
+    "<form action='/display' method='POST'><input type='hidden' name='state' value='off'><button class='r'>Display OFF</button></form></div>"
+    "<div class='row'><form action='/wifiled' method='POST'><input type='hidden' name='state' value='on'><button class='g'>WiFi LED ON</button></form>"
+    "<form action='/wifiled' method='POST'><input type='hidden' name='state' value='off'><button class='r'>WiFi LED OFF</button></form></div>"
+    "<div class='row'><form action='/azureled' method='POST'><input type='hidden' name='state' value='on'><button class='g'>Azure LED ON</button></form>"
+    "<form action='/azureled' method='POST'><input type='hidden' name='state' value='off'><button class='r'>Azure LED OFF</button></form></div>"
+    "<div class='row'><form action='/userled' method='POST'><input type='hidden' name='state' value='on'><button class='g'>User LED ON</button></form>"
+    "<form action='/userled' method='POST'><input type='hidden' name='state' value='off'><button class='r'>User LED OFF</button></form></div>"
+    "<div class='row'><form action='/watchdog' method='POST'><input type='hidden' name='state' value='enable'><button class='g'>Watchdog ON</button></form>"
+    "<form action='/watchdog' method='POST'><input type='hidden' name='state' value='disable'><button class='r'>Watchdog OFF</button></form></div>"
+    "<form action='/reset' method='POST' style='margin:16px 0 8px'><button class='u'>RESET</button></form>"
     "<a href='/' class='gray'>BACK</a>"
     "</div></body></html>",
-    config.deviceId,
-    config.deviceId,
+    htmlEscape(config.deviceId).c_str(),
+    htmlEscape(config.deviceId).c_str(),
     mqttConnected ? "on" : "off",
     mqttConnected ? "CONNECTED" : "DISCONNECTED",
-    config.mqttServer,
+    htmlEscape(config.mqttServer).c_str(),
     watchdogEnabled ? "on" : "off",
     watchdogEnabled ? "ENABLED" : "DISABLED",
     watchdogEnabled ? (timeoutRemaining > 0 ? "<span style='color:#999'> | </span><span style='color:#999'>OK</span>" : "") : "");
@@ -767,9 +586,7 @@ void sendControlPage(WiFiClient &client) {
   Serial.print("Control page HTML size: ");
   Serial.println(bodyLen);
   
-  sendHttpHeader(client, bodyLen, "text/html");
-  client.write((const uint8_t*)body, bodyLen);
-  client.flush();
+  sendAdminPage(client, body);
   Serial.println("Control page sent!");
 }
 
@@ -812,7 +629,7 @@ void sendTelemetryPage(WiFiClient &client) {
     "</div>"
     "<a href='/' class='gray'>BACK</a>"
     "</body></html>",
-    config.deviceId,
+    htmlEscape(config.deviceId).c_str(),
     lastTemperature, lastHumidity, lastPressure,
     lastAccelX, lastAccelY, lastAccelZ,
     lastGyroX, lastGyroY, lastGyroZ,
@@ -841,7 +658,7 @@ void sendSetupPage(WiFiClient &client) {
   Serial.println(sendStart);
   
   // Larger buffer for setup page with form inputs
-  char body[3072];
+  char body[5632];
   int bodyLen = snprintf(body, sizeof(body),
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Setup - %s</title>"
     "<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0;padding:10px;background:#f5f5f7;max-width:500px;margin:0 auto}"
@@ -857,12 +674,12 @@ void sendSetupPage(WiFiClient &client) {
     "@media(min-width:400px){body{padding:15px}.c{padding:20px}}"
     "</style></head><body>"
     "<div class='c'><h2>Device Setup</h2>"
-    "<form action='/save-config' method='GET'>"
+    "<form action='/save-config' method='POST'>"
     "<label>Device ID</label><input name='deviceId' value='%s' maxlength='31'>"
     "<label>Model</label><input name='model' value='%s' maxlength='15'>"
     "<label>Location</label><input name='location' value='%s' maxlength='31'>"
     "<label>WiFi SSID</label><input name='ssid' value='%s' maxlength='31'>"
-    "<label>WiFi Password</label><input name='password' type='password' value='%s' maxlength='63'>"
+    "<label>WiFi Password (blank keeps current)</label><input name='password' type='password' autocomplete='new-password' maxlength='63'>"
     "<label>MQTT Server</label><input name='mqttServer' value='%s' maxlength='63'>"
     "<label>MQTT Port</label><input name='mqttPort' type='number' value='%d' min='1' max='65535'>"
     "<label>MQTT Topic</label><input name='mqttTopic' value='%s' maxlength='63'>"
@@ -871,10 +688,11 @@ void sendSetupPage(WiFiClient &client) {
     "<p class='note'>Saving will write configuration to Flash memory and reboot the device.</p>"
     "<a href='/' class='gray'>CANCEL</a>"
     "</div></body></html>",
-    config.deviceId,
-    config.deviceId, config.model, config.location,
-    config.ssid, config.password, config.mqttServer,
-    config.mqttPort, config.mqttTopic);
+    htmlEscape(config.deviceId).c_str(),
+    htmlEscape(config.deviceId).c_str(), htmlEscape(config.model).c_str(),
+    htmlEscape(config.location).c_str(), htmlEscape(config.ssid).c_str(),
+    htmlEscape(config.mqttServer).c_str(), int(config.mqttPort),
+    htmlEscape(config.mqttTopic).c_str());
   
   if (bodyLen < 0) {
     bodyLen = 0;
@@ -887,9 +705,7 @@ void sendSetupPage(WiFiClient &client) {
   Serial.print("Setup page HTML size: ");
   Serial.println(bodyLen);
   
-  sendHttpHeader(client, bodyLen, "text/html");
-  client.write((const uint8_t*)body, bodyLen);
-  client.flush();
+  sendAdminPage(client, body);
   Serial.println("Setup page sent!");
 }
 
@@ -1036,93 +852,71 @@ void webServerThreadFunc() {
       if (client) {
         Serial.println(">>> Web client connected <<<");
         
-        // Wait up to 2 seconds for incoming data
-        unsigned long start = millis();
-        while (!client.available() && client.connected() && (millis() - start < 2000)) {
-          Thread::wait(1);
-        }
-        
-        if (!client.available()) {
-          Serial.println("No data received within timeout, closing");
+        Http::Request request;
+        if (!Http::readRequest(client, request, NSAPI_ERROR_WOULD_BLOCK, millis,
+                               [](unsigned ms) { Thread::wait(ms); })) {
+          httpReply(client, 400, "Malformed or timed-out HTTP request");
           client.stop();
           continue;
         }
-        
-        // Read the first request line: "GET /path HTTP/1.1"
-        String requestLine = "";
-        unsigned long readStart = millis();
-        while (client.available() && requestLine.length() < 512 && millis() - readStart < 100) {
-          char c = client.read();
-          if (c == '\r') continue;
-          if (c == '\n') break;
-          requestLine += c;
-        }
-        requestLine.trim();
-        
-        Serial.print("HTTP request line: ");
-        Serial.println(requestLine);
-        
-        // Parse HTTP method and path
-        bool isPost = requestLine.startsWith("POST ");
-        bool isGet = requestLine.startsWith("GET ");
-        
-        if (!isGet && !isPost) {
-          Serial.println("Unsupported HTTP method, closing");
-          client.stop();
-          continue;
-        }
-        
-        // Extract the path between the first and second spaces
-        int firstSpace = requestLine.indexOf(' ');
-        int secondSpace = requestLine.indexOf(' ', firstSpace + 1);
-        
-        String path = "/";
-        if (firstSpace > 0 && secondSpace > firstSpace) {
-          path = requestLine.substring(firstSpace + 1, secondSpace);
-        }
-        
-        Serial.print("Raw path: ");
-        Serial.println(path);
-        
-        // Keep full path for save-config (needs query params)
-        String fullPath = path;
-        
-        // Strip any query string so /control?x=1 becomes /control
+        String path = request.path;
         int qPos = path.indexOf('?');
-        if (qPos > 0) {
-          path = path.substring(0, qPos);
+        if (qPos >= 0) path = path.substring(0, qPos);
+        bool publicPage = path == "/" || path == "/telemetry";
+        if (!publicPage && !authorizeAdmin(client, request)) {
+          client.stop();
+          continue;
         }
-        
-        Serial.print("Normalized path: ");
+        if (!publicPage && qPos >= 0) {
+          httpReply(client, 400, "Administrative parameters belong in POST bodies, not URLs");
+          client.stop();
+          continue;
+        }
+        Serial.print("HTTP route: ");
         Serial.println(path);
-        
-        // Parse headers (need Content-Length for POST requests)
-        size_t contentLength = 0;
-        String headerLine = "";
-        unsigned long headerStart = millis();
-        while (client.connected() && millis() - headerStart < 100) {
-          if (!client.available()) {
-            Thread::wait(1);
+        if (handleOtaRequest(client, request)) {
+          client.stop();
+          continue;
+        }
+        bool mutation = path != "/" && path != "/telemetry" &&
+                        path != "/control" && path != "/setup";
+        if ((mutation && !authorizeMutation(client, request)) ||
+            (!mutation && strcmp(request.method, "GET"))) {
+          if (!mutation) httpReply(client, 400, "GET required");
+          client.stop();
+          continue;
+        }
+        if (otaMaintenance() && mutation) {
+          httpReply(client, 409, "Administrative changes are locked during OTA");
+          client.stop();
+          continue;
+        }
+        String fullPath = path;
+        if (mutation) {
+          if (qPos >= 0 || !request.hasLength || request.length > 1024) {
+            httpReply(client, 400, "Use a bounded POST form body, not query parameters");
+            client.stop();
             continue;
           }
-          char c = client.read();
-          if (c == '\r') continue;
-          if (c == '\n') {
-            if (headerLine.length() == 0) break; // End of headers
-            
-            // Parse Content-Length header
-            if (isPost && headerLine.startsWith("Content-Length:")) {
-              String lengthStr = headerLine.substring(15);
-              lengthStr.trim();
-              contentLength = (size_t)atoi(lengthStr.c_str());
-              Serial.print("Content-Length: ");
-              Serial.println(contentLength);
-            }
-            
-            headerLine = "";
-          } else {
-            headerLine += c;
+          char form[1025];
+          unsigned received = 0;
+          uint32_t started = millis();
+          while (received < request.length && uint32_t(millis() - started) < 5000) {
+            int count = client.read(reinterpret_cast<uint8_t*>(form) + received,
+                                    request.length - received);
+            if (count == NSAPI_ERROR_WOULD_BLOCK) { Thread::wait(1); continue; }
+            if (count <= 0) break;
+            received += unsigned(count);
           }
+          if (received != request.length || memchr(form, 0, received)) {
+            httpReply(client, 400, "Incomplete form body");
+            client.stop();
+            continue;
+          }
+          form[received] = 0;
+          fullPath += "?";
+          fullPath += form;
+          fullPath += " ";
         }
         
         // Process commands
@@ -1196,7 +990,7 @@ void webServerThreadFunc() {
               strncpy(config.ssid, tempBuffer, sizeof(config.ssid) - 1);
               config.ssid[sizeof(config.ssid) - 1] = 0;
             }
-            if (getQueryParam(fullPath, "password", tempBuffer, sizeof(tempBuffer))) {
+            if (getQueryParam(fullPath, "password", tempBuffer, sizeof(tempBuffer)) && tempBuffer[0]) {
               strncpy(config.password, tempBuffer, sizeof(config.password) - 1);
               config.password[sizeof(config.password) - 1] = 0;
             }
@@ -1225,7 +1019,7 @@ void webServerThreadFunc() {
               client.stop();
             } else {
               Serial.println("Failed to save configuration!");
-              sendMainPage(client);
+              httpReply(client, 503, "Configuration save failed; settings were not committed");
               client.flush();
               Thread::wait(10);
               client.stop();
@@ -1400,7 +1194,12 @@ void setup() {
   Serial.println("\n");
   
   // Try to load configuration from Flash first
-  if (!loadConfigFromFlash()) {
+  ConfigLoad configLoad = loadStoredConfig(config);
+  if (configLoad == ConfigLoad::Failed) {
+    Serial.println("CONFIG: recovery required; refusing defaults and network startup");
+    while (true) delay(1000);
+  }
+  if (configLoad == ConfigLoad::Empty) {
     // If no valid config found, load defaults
     loadDefaultConfig();
     Serial.println("Using default configuration (Flash storage empty/invalid)");
@@ -1487,7 +1286,7 @@ void setup() {
     webServerStarted = true;
     
     // Create web server thread using mbed Thread with 8KB stack
-    webServerThread_ptr = new rtos::Thread(osPriorityNormal, 8192);
+    webServerThread_ptr = new rtos::Thread(osPriorityNormal, 16384);
     if (webServerThread_ptr == NULL) {
       Serial.println("Failed to create web server thread!");
     } else {
@@ -1518,6 +1317,8 @@ void setup() {
 
 // Arduino loop function - called repeatedly
 void loop() {
+  pollOta();
+  pollOperatorSerial();
   static int counter = 0;
   static unsigned long lastSensorRead = 0;
   static unsigned long lastMqttPublish = 0;  // Separate timer for MQTT
